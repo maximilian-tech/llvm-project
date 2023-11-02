@@ -17,14 +17,11 @@ jobs:
         with:
           separator: ","
 
-      - name: Calculate number of commits to fetch
-        run: echo "PR_FETCH_DEPTH=$(( ${{ github.event.pull_request.commits }} + 1 ))" >> "${GITHUB_ENV}"
-
       - name: Fetch PR sources
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: ${{ env.PR_FETCH_DEPTH }}
+          ref: "refs/pull/${{ github.event.number }}/merge"
+          fetch-depth: 1
           path: pr-sources
 
       - name: Print commits being evaluated
@@ -65,17 +62,19 @@ jobs:
 
       - name: Install python dependencies
         run: pip install -r llvm-sources/llvm/utils/git/requirements_formatting.txt
+      
+      - name: Print diff for testing
+        run: git diff HEAD^ HEAD
 
       - name: Run code formatter
         env:
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_DEPTH: ${{ github.event.pull_request.commits }}
           CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
         working-directory: ./pr-sources
         run: |
           python ../llvm-sources/llvm/utils/git/code-format-helper.py \
             --token ${{ secrets.GITHUB_TOKEN }} \
             --issue-number $GITHUB_PR_NUMBER \
-            --start-rev HEAD~$PR_DEPTH \
+            --start-rev HEAD^ \
             --end-rev HEAD \
             --changed-files "$CHANGED_FILES"
