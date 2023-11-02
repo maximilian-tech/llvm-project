@@ -23,7 +23,7 @@ jobs:
       - name: Fetch PR sources
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: "refs/pull/${{ github.event.number }}/merge"
           fetch-depth: ${{ env.PR_FETCH_DEPTH }}
           path: pr-sources
 
