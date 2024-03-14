@@ -1,0 +1,507 @@
+//===- InputGeneration.cpp - Input generation instrumentation -------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file is a part of InputGen. The idea is that we generate inputs for a
+// piece of code by instrumenting it and running it once (per input) with a
+// dedicated runtime. Each run yields an input (arguments and memory state) for
+// the original piece of code.
+//
+//===----------------------------------------------------------------------===//
+
+#include "llvm/Transforms/IPO/InputGeneration.h"
+
+#include "llvm/ADT/EnumeratedArray.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/ProfileData/InstrProf.h"
+#include "llvm/ProfileData/InstrProfReader.h"
+#include "llvm/Support/BLAKE3.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/HashBuilder.h"
+#include "llvm/Support/ScopedPrinter.h"
+#include "llvm/Support/VirtualFileSystem.h"
+#include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/IPO/Attributor.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
+
+using namespace llvm;
+
+#define DEBUG_TYPE "input-gen"
+
+constexpr int LLVM_INPUT_GEN_VERSION = 1;
+
+constexpr char InputGenVersionCheckNamePrefix[] =
+    "__inputgen_version_mismatch_check_v";
+constexpr char InputGenModuleCtorName[] = "inputgen.module_ctor";
+constexpr char InputGenInitName[] = "__inputgen_init";
+constexpr char InputGenFilenameVar[] = "__inputgen_profile_filename";
+static const std::string InputGenCallbackPrefix = "__inputgen_";
+
+static std::string InputGenOutputFilename = "input_gen_%{fn}_%{uuid}.c";
+
+static cl::opt<bool> ClInsertVersionCheck(
+    "input-gen-guard-against-version-mismatch",
+    cl::desc("Guard against compiler/runtime version mismatch."), cl::Hidden,
+    cl::init(true));
+
+static cl::opt<std::string, true> ClOutputFilename(
+    "input-gen-output-filename",
+    cl::desc("Name of the file the generated input is stored in."), cl::Hidden,
+    cl::location(InputGenOutputFilename));
+
+static cl::opt<std::string>
+    ClEntryPoint("input-gen-entry-point",
+                 cl::desc("Entry point identification (via name or #)."),
+                 cl::Hidden, cl::init("main"));
+
+STATISTIC(NumInstrumented, "Number of instrumented instructions");
+
+namespace {
+
+std::string getTypeName(const Type *Ty) {
+  switch (Ty->getTypeID()) {
+  case Type::TypeID::PointerTyID:
+    return "ptr";
+  case Type::TypeID::IntegerTyID:
+    return "i" + to_string(Ty->getIntegerBitWidth());
+  case Type::TypeID::FloatTyID:
+    return "float";
+  case Type::TypeID::DoubleTyID:
+    return "double";
+  default:
+    return "unknown";
+  };
+}
+
+struct InterestingMemoryAccess {
+  Instruction *I = nullptr;
+  Value *Addr = nullptr;
+  Type *AccessTy;
+  Value *MaybeMask = nullptr;
+
+  enum KindTy { WRITE, READ, READ_THEN_WRITE, Last = READ_THEN_WRITE } Kind;
+
+  static std::string kindAsStr(KindTy K) {
+    switch (K) {
+    case WRITE:
+      return "write";
+    case READ:
+      return "read";
+    case READ_THEN_WRITE:
+      return "read_write";
+    default:
+      break;
+    }
+    llvm_unreachable("Unknown kind");
+  }
+};
+
+/// Instrument the code in module to profile memory accesses.
+class InputGenInstrumenter {
+public:
+  InputGenInstrumenter(Module &M, AnalysisManager<Module> &AM) : AM(AM) {
+    Ctx = &(M.getContext());
+    PtrTy = PointerType::getUnqual(*Ctx);
+    Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
+    Int8Ty = IntegerType::getIntNTy(*Ctx, 8);
+    Int16Ty = IntegerType::getIntNTy(*Ctx, 16);
+    Int32Ty = IntegerType::getIntNTy(*Ctx, 32);
+    Int64Ty = IntegerType::getIntNTy(*Ctx, 64);
+    VoidTy = PointerType::getVoidTy(*Ctx);
+    FloatTy = Type::getFloatTy(*Ctx);
+    DoubleTy = Type::getDoubleTy(*Ctx);
+  }
+
+  /// If it is an interesting memory access, populate information
+  /// about the access and return a InterestingMemoryAccess struct.
+  /// Otherwise return std::nullopt.
+  std::optional<InterestingMemoryAccess>
+  isInterestingMemoryAccess(Instruction *I) const;
+
+  void instrumentMop(const InterestingMemoryAccess &Access,
+                     const DataLayout &DL);
+  void instrumentAddress(const InterestingMemoryAccess &Access,
+                         const DataLayout &DL);
+  void instrumentMaskedLoadOrStore(const InterestingMemoryAccess &Access,
+                                   const DataLayout &DL);
+  void instrumentMemIntrinsic(MemIntrinsic *MI);
+
+  void instrumentFunction(Function &F);
+  void instrumentEntryPoint(Function &F);
+  void createRecordingEntryPoint(Function &F);
+
+private:
+  void initializeCallbacks(Module &M);
+
+  AnalysisManager<Module> &AM;
+
+  LLVMContext *Ctx;
+  Type *VoidTy, *FloatTy, *DoubleTy;
+  IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
+  PointerType *PtrTy;
+
+  // These arrays is indexed by AccessIsWrite
+  DenseMap<std::pair<int, Type *>, FunctionCallee> InputGenMemoryAccessCallback;
+
+  FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
+};
+
+class ModuleInputGenInstrumenter {
+public:
+  ModuleInputGenInstrumenter(Module &M, AnalysisManager<Module> &AM)
+      : IGI(M, AM) {
+    TargetTriple = Triple(M.getTargetTriple());
+  }
+
+  bool instrumentModule(Module &);
+
+private:
+  Triple TargetTriple;
+  Function *InputGenCtorFunction = nullptr;
+  InputGenInstrumenter IGI;
+};
+
+} // end anonymous namespace
+
+InputGenerationInstrumentPass::InputGenerationInstrumentPass() = default;
+
+PreservedAnalyses
+InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &AM) {
+  ModuleInputGenInstrumenter Profiler(M, AM);
+  if (Profiler.instrumentModule(M))
+    return PreservedAnalyses::none();
+  return PreservedAnalyses::all();
+}
+
+// Instrument memset/memmove/memcpy
+void InputGenInstrumenter::instrumentMemIntrinsic(MemIntrinsic *MI) {
+  IRBuilder<> IRB(MI);
+  if (isa<MemTransferInst>(MI)) {
+    IRB.CreateCall(isa<MemMoveInst>(MI) ? InputGenMemmove : InputGenMemcpy,
+                   {MI->getOperand(0), MI->getOperand(1),
+                    IRB.CreateIntCast(MI->getOperand(2), PtrTy, false)});
+  } else if (isa<MemSetInst>(MI)) {
+    IRB.CreateCall(
+        InputGenMemset,
+        {MI->getOperand(0),
+         IRB.CreateIntCast(MI->getOperand(1), IRB.getInt32Ty(), false),
+         IRB.CreateIntCast(MI->getOperand(2), PtrTy, false)});
+  }
+  MI->eraseFromParent();
+}
+
+std::optional<InterestingMemoryAccess>
+InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
+  InterestingMemoryAccess Access;
+  Access.I = I;
+  if (isa<MemIntrinsic>(I))
+    return Access;
+
+  if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+    Access.Kind = InterestingMemoryAccess::READ;
+    Access.AccessTy = LI->getType();
+    Access.Addr = LI->getPointerOperand();
+  } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
+    Access.Kind = InterestingMemoryAccess::WRITE;
+    Access.AccessTy = SI->getValueOperand()->getType();
+    Access.Addr = SI->getPointerOperand();
+  } else if (AtomicRMWInst *RMW = dyn_cast<AtomicRMWInst>(I)) {
+    Access.Kind = InterestingMemoryAccess::READ_THEN_WRITE;
+    Access.AccessTy = RMW->getValOperand()->getType();
+    Access.Addr = RMW->getPointerOperand();
+  } else if (AtomicCmpXchgInst *XCHG = dyn_cast<AtomicCmpXchgInst>(I)) {
+    Access.Kind = InterestingMemoryAccess::READ_THEN_WRITE;
+    Access.AccessTy = XCHG->getCompareOperand()->getType();
+    Access.Addr = XCHG->getPointerOperand();
+  } else if (auto *CI = dyn_cast<CallInst>(I)) {
+    auto *F = CI->getCalledFunction();
+    if (F && (F->getIntrinsicID() == Intrinsic::masked_load ||
+              F->getIntrinsicID() == Intrinsic::masked_store)) {
+      unsigned OpOffset = 0;
+      if (F->getIntrinsicID() == Intrinsic::masked_store) {
+        // Masked store has an initial operand for the value.
+        OpOffset = 1;
+        Access.AccessTy = CI->getArgOperand(0)->getType();
+        Access.Kind = InterestingMemoryAccess::WRITE;
+      } else {
+        Access.AccessTy = CI->getType();
+        Access.Kind = InterestingMemoryAccess::READ;
+      }
+
+      auto *BasePtr = CI->getOperand(0 + OpOffset);
+      Access.MaybeMask = CI->getOperand(2 + OpOffset);
+      Access.Addr = BasePtr;
+    }
+  }
+
+  if (!Access.Addr)
+    return std::nullopt;
+
+  // Do not instrument accesses from different address spaces; we cannot deal
+  // with them.
+  Type *PtrTy = cast<PointerType>(Access.Addr->getType()->getScalarType());
+  if (PtrTy->getPointerAddressSpace() != 0)
+    return std::nullopt;
+
+  // Ignore swifterror addresses.
+  // swifterror memory addresses are mem2reg promoted by instruction
+  // selection. As such they cannot have regular uses like an instrumentation
+  // function and it makes no sense to track them as memory.
+  if (Access.Addr->isSwiftError())
+    return std::nullopt;
+
+  // Peel off GEPs and BitCasts.
+  auto *Addr = Access.Addr->stripInBoundsOffsets();
+
+  if (GlobalVariable *GV = dyn_cast<GlobalVariable>(Addr)) {
+    // Do not instrument PGO counter updates.
+    if (GV->hasSection()) {
+      StringRef SectionName = GV->getSection();
+      // Check if the global is in the PGO counters section.
+      auto OF = Triple(I->getModule()->getTargetTriple()).getObjectFormat();
+      if (SectionName.ends_with(
+              getInstrProfSectionName(IPSK_cnts, OF, /*AddSegmentInfo=*/false)))
+        return std::nullopt;
+    }
+
+    // Do not instrument accesses to LLVM internal variables.
+    if (GV->getName().starts_with("__llvm"))
+      return std::nullopt;
+  }
+
+  return Access;
+}
+
+void InputGenInstrumenter::instrumentMaskedLoadOrStore(
+    const InterestingMemoryAccess &Access, const DataLayout &DL) {
+  llvm_unreachable("Not implemented yet");
+}
+
+void InputGenInstrumenter::instrumentMop(const InterestingMemoryAccess &Access,
+                                         const DataLayout &DL) {
+
+  if (Access.MaybeMask)
+    instrumentMaskedLoadOrStore(Access, DL);
+  else
+    instrumentAddress(Access, DL);
+}
+
+void InputGenInstrumenter::instrumentAddress(
+    const InterestingMemoryAccess &Access, const DataLayout &DL) {
+  IRBuilder<> IRB(Access.I);
+  int32_t AllocSize = DL.getTypeAllocSize(Access.AccessTy);
+  SmallVector<const Value *, 4> Objects;
+  getUnderlyingObjects(Access.Addr, Objects, /*LI=*/nullptr,
+                       /*MaxLookup=*/12);
+
+  Value *Args[] = {Access.Addr, ConstantInt::get(Int32Ty, AllocSize),
+                   Objects.size() == 1
+                       ? const_cast<Value *>(Objects[0])
+                       : getUnderlyingObject(Access.Addr, /*MaxLookup=*/12)};
+  auto Fn = InputGenMemoryAccessCallback[{Access.Kind, Access.AccessTy}];
+  assert(Fn.getCallee());
+  IRB.CreateCall(Fn, Args);
+}
+
+// Create the variable for the profile file name.
+void createProfileFileNameVar(Module &M, Triple &TT) {
+  assert(!InputGenOutputFilename.empty() &&
+         "Unexpected empty string for output filename");
+  Constant *ProfileNameConst = ConstantDataArray::getString(
+      M.getContext(), InputGenOutputFilename.c_str(), true);
+  GlobalVariable *ProfileNameVar = new GlobalVariable(
+      M, ProfileNameConst->getType(), /*isConstant=*/true,
+      GlobalValue::WeakAnyLinkage, ProfileNameConst, InputGenFilenameVar);
+  if (TT.supportsCOMDAT()) {
+    ProfileNameVar->setLinkage(GlobalValue::ExternalLinkage);
+    ProfileNameVar->setComdat(M.getOrInsertComdat(InputGenFilenameVar));
+  }
+}
+
+bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
+  Function *EntryPoint = M.getFunction(ClEntryPoint);
+  if (!EntryPoint) {
+    int No;
+    if (to_integer(ClEntryPoint, No)) {
+      auto It = M.begin(), End = M.end();
+      while (No-- > 0 && It != End)
+        It = std::next(It);
+      if (It != End)
+        EntryPoint = &*It;
+    }
+  }
+  if (!EntryPoint) {
+    errs() << "No entry point found, used \"" << ClEntryPoint << "\".\n";
+    return false;
+  }
+  if (EntryPoint->isDeclaration()) {
+    errs() << "Entry point is declaration, used \"" << ClEntryPoint << "\".\n";
+    return false;
+  }
+
+  IGI.instrumentEntryPoint(*EntryPoint);
+  IGI.createRecordingEntryPoint(*EntryPoint);
+
+  // Create a module constructor.
+  std::string InputGenVersion = std::to_string(LLVM_INPUT_GEN_VERSION);
+  std::string VersionCheckName =
+      ClInsertVersionCheck ? (InputGenVersionCheckNamePrefix + InputGenVersion)
+                           : "";
+  std::tie(InputGenCtorFunction, std::ignore) =
+      createSanitizerCtorAndInitFunctions(M, InputGenModuleCtorName,
+                                          InputGenInitName, /*InitArgTypes=*/{},
+                                          /*InitArgs=*/{}, VersionCheckName);
+
+  appendToGlobalCtors(M, InputGenCtorFunction, /*Priority=*/1);
+
+  createProfileFileNameVar(M, TargetTriple);
+
+  return true;
+}
+
+void InputGenInstrumenter::initializeCallbacks(Module &M) {
+
+  Type *Types[] = {Int1Ty,  Int8Ty, Int16Ty, Int32Ty,
+                   Int64Ty, PtrTy,  FloatTy, DoubleTy};
+  for (Type *Ty : Types) {
+    for (int I = 0; I < InterestingMemoryAccess::Last; ++I) {
+      InterestingMemoryAccess::KindTy K = InterestingMemoryAccess::KindTy(I);
+      const std::string KindStr = InterestingMemoryAccess::kindAsStr(K);
+      InputGenMemoryAccessCallback[{K, Ty}] = M.getOrInsertFunction(
+          InputGenCallbackPrefix + KindStr + "_" + getTypeName(Ty), VoidTy,
+          PtrTy, Int32Ty, PtrTy);
+    }
+  }
+
+  InputGenMemmove = M.getOrInsertFunction(InputGenCallbackPrefix + "memmove",
+                                          PtrTy, PtrTy, PtrTy, PtrTy);
+  InputGenMemcpy = M.getOrInsertFunction(InputGenCallbackPrefix + "memcpy",
+                                         PtrTy, PtrTy, PtrTy, PtrTy);
+  InputGenMemset = M.getOrInsertFunction(InputGenCallbackPrefix + "memset",
+                                         PtrTy, PtrTy, Int32Ty, PtrTy);
+}
+
+void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
+
+  initializeCallbacks(*F.getParent());
+
+  Module &M = *F.getParent();
+  SetVector<Function *> Functions;
+  Functions.insert(&F);
+  for (Function &Fn : M) {
+    if (&Fn == &F || Fn.isDeclaration())
+      continue;
+
+    Fn.setVisibility(GlobalValue::DefaultVisibility);
+    Fn.setLinkage(GlobalValue::InternalLinkage);
+    Functions.insert(&Fn);
+  }
+
+  FunctionAnalysisManager &FAM =
+      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  AnalysisGetter AG(FAM, /* CachedOnly */ false);
+
+  CallGraphUpdater CGUpdater;
+  BumpPtrAllocator Allocator;
+  InformationCache InfoCache(M, AG, Allocator, nullptr);
+  for (Function &F : M)
+    Functions.insert(&F);
+
+  AttributorConfig AC(CGUpdater);
+  AC.IsModulePass = true;
+  AC.DeleteFns = true;
+  AC.Allowed = nullptr;
+  AC.UseLiveness = true;
+  AC.DefaultInitializeLiveInternals = false;
+  AC.InitializationCallback = [](Attributor &A, const Function &F) {
+    //    A.getOrCreateAAFor<AAIsDead>(IRPosition::function(F), nullptr,
+    //                                 DepClassTy::OPTIONAL);
+  };
+
+  Attributor A(Functions, InfoCache, AC);
+  A.run();
+
+  for (auto *Fn : Functions)
+    if (!Fn->isDeclaration())
+      instrumentFunction(*Fn);
+}
+
+void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
+  Module &M = *F.getParent();
+  if (auto *OldMain = M.getFunction("main"))
+    OldMain->setName("__user_main");
+
+  FunctionType *MainTy = FunctionType::get(Int32Ty, {Int32Ty, PtrTy}, false);
+  auto *MainFn =
+      Function::Create(MainTy, GlobalValue::ExternalLinkage, "main", M);
+  auto *EntryBB = BasicBlock::Create(*Ctx, "entry", MainFn);
+
+  auto *RI =
+      ReturnInst::Create(*Ctx, ConstantInt::getNullValue(Int32Ty), EntryBB);
+  IRBuilder<> IRB(RI);
+
+  SmallVector<Value *> Args;
+  for (auto &Arg : F.args()) {
+    FunctionCallee ArgPtrFn = M.getOrInsertFunction(
+        InputGenCallbackPrefix + "arg_" + getTypeName(Arg.getType()),
+        FunctionType::get(Arg.getType(), false));
+    Args.push_back(IRB.CreateCall(ArgPtrFn, {}));
+  }
+  IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
+}
+
+void InputGenInstrumenter::instrumentFunction(Function &F) {
+
+  LLVM_DEBUG(dbgs() << "INPUTGEN instrumenting:\n" << F.getName() << "\n");
+
+  SmallVector<InterestingMemoryAccess, 16> ToInstrument;
+
+  // Fill the set of memory operations to instrument.
+  for (auto &I : instructions(F))
+    if (auto IMA = isInterestingMemoryAccess(&I))
+      ToInstrument.push_back(*IMA);
+
+  if (ToInstrument.empty()) {
+    LLVM_DEBUG(dbgs() << "INPUTGEN nothing to instrument in " << F.getName()
+                      << "\n");
+  }
+
+  auto DL = F.getParent()->getDataLayout();
+
+  for (auto &IMA : ToInstrument) {
+    if (isa<MemIntrinsic>(IMA.I))
+      instrumentMemIntrinsic(cast<MemIntrinsic>(IMA.I));
+    else
+      instrumentMop(IMA, DL);
+    NumInstrumented++;
+  }
+
+  LLVM_DEBUG(dbgs() << "INPUTGEN done instrumenting: " << ToInstrument.size()
+                    << " instructions in " << F.getName() << "\n");
+}
