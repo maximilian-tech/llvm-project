@@ -35,6 +35,8 @@ add_llvm_tool_subdirectory(llvm-config)
 add_llvm_tool_subdirectory(llvm-lto)
 add_llvm_tool_subdirectory(llvm-profdata)
 
+add_llvm_tool_subdirectory(input-gen)
+
 # Projects supported via LLVM_EXTERNAL_*_SOURCE_DIR need to be explicitly
 # specified.
 add_llvm_external_project(clang)
