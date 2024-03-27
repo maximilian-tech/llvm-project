@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <system_error>
+#include <unistd.h>
 #include <vector>
 
 using namespace llvm;
@@ -35,6 +36,9 @@ static cl::opt<std::string> InputGenDriver("input-gen-driver", cl::Required,
 static cl::opt<std::string> InputFilename(cl::Positional,
                                           cl::desc("Input file"),
                                           cl::cat(InputGenCategory));
+
+static cl::opt<bool> CompileInputGenExecutable("compile-input-gen-executable",
+                                               cl::cat(InputGenCategory));
 
 namespace llvm {
 cl::opt<bool> SaveTemps("save-temps", cl::init(false),
@@ -124,13 +128,15 @@ public:
   std::string Clang;
   InputGenOrchestration(Module &M) : M(M){};
   void init(int Argc, char **Argv) {
-    ErrorOr<std::string> ClangOrErr =
-        findClang(Argv[0], "ignoring-this-for-now");
-    if (ClangOrErr) {
-      Clang = *ClangOrErr;
-    } else {
-      errs() << "input-gen: Unable to find clang\n";
-      fatalError("input-gen: Unable to generate input.");
+    if (CompileInputGenExecutable) {
+      ErrorOr<std::string> ClangOrErr =
+          findClang(Argv[0], "ignoring-this-for-now");
+      if (ClangOrErr) {
+        Clang = *ClangOrErr;
+      } else {
+        errs() << "input-gen: Unable to find clang\n";
+        fatalError("input-gen: Unable to generate input.");
+      }
     }
   }
 
@@ -154,7 +160,7 @@ public:
 
       llvm::outs() << "Generating input...\n";
 
-      if (generateInput(*ClonedModule)) {
+      if (generateInput(*ClonedModule, ClonedF)) {
         llvm::outs() << "Generating input succeeded\n";
       } else {
         llvm::outs() << "Generating input failed\n";
@@ -162,52 +168,46 @@ public:
     }
   }
   bool generateInput(Module &M, Function &F) {
-    std::string Prefix = "inputgen-" + M.getName().str() + "-" + F.getName().str();
-    std::string OutExecutable = createTempFile(Prefix, "run");
-    // Use proper path concat function
-    std::string OutInputGenerated = OutputDir + "/" + Prefix + ".c";
+    std::string Name = F.getName().str();
+    // TODO Use proper path concat function
+    std::string InstrumentedModule =
+        OutputDir + "/" + Name + ".instrumented.bc";
+    std::string InputGenExecutable =
+        OutputDir + "/" + Name + ".input_gen_executable";
 
-    auto Temp = sys::fs::TempFile::create(Prefix + "-instrumented-%%%%%%%.bc");
-    if (!Temp) {
-      errs() << ToolName
-             << ": Error making unique filename: " << toString(Temp.takeError())
-             << "\n";
-      exit(1);
-    }
-    DiscardTemp Discard{*Temp};
-    if (writeProgramToFile(Temp->FD, M)) {
+    int InstrumentedModuleFD;
+    std::error_code EC = sys::fs::openFileForWrite(InstrumentedModule, InstrumentedModuleFD);
+    if (EC)
+      // errc::permission_denied happens on Windows when we try to open a file
+      // that has been marked for deletion.
+      if (!(EC == std::errc::file_exists || EC == std::errc::permission_denied))
+        return false;
+
+    if (writeProgramToFile(InstrumentedModuleFD, M)) {
       errs() << ToolName << ": Error emitting bitcode to file '"
-             << Temp->TmpName << "'!\n";
+             << InstrumentedModule << "'!\n";
+      close(InstrumentedModuleFD);
       exit(1);
     }
+    close(InstrumentedModuleFD);
 
-    // TODO discard the executable too
-
-    outs() << "Compiling " << Temp->TmpName << "\n";
-    SmallVector<StringRef, 8> Args = {Clang,         "-O2", InputGenDriver,
-                                      Temp->TmpName, "-o",  OutExecutable};
-    std::string ErrMsg;
-    int Res = sys::ExecuteAndWait(
-        Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
-        /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg);
-    if (Res) {
-      if (!ErrMsg.empty())
-        errs() << "input-gen: gen binary compilation failed: " + ErrMsg + "\n";
-      else
-        errs() << "input-gen: gen binary compilation failed.\n";
-      return false;
-    }
-
-    outs() << "Executing " << OutExecutable << "\n";
-    Res = sys::ExecuteAndWait(OutExecutable, {OutExecutable},
-                              /*Env=*/std::nullopt, /*Redirects=*/{},
-                              /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg);
-    if (Res) {
-      if (!ErrMsg.empty())
-        errs() << "input-gen: gen binary execution failed: " + ErrMsg + "\n";
-      else
-        errs() << "input-gen: gen binary execution failed.\n";
-      return false;
+    if (CompileInputGenExecutable) {
+      outs() << "Compiling " << InstrumentedModule << "\n";
+      SmallVector<StringRef, 8> Args = {Clang,          "-O2",
+                                        InputGenDriver, InstrumentedModule,
+                                        "-o",           InputGenExecutable};
+      std::string ErrMsg;
+      int Res = sys::ExecuteAndWait(
+          Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
+          /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg);
+      if (Res) {
+        if (!ErrMsg.empty())
+          errs() << "input-gen: gen binary compilation failed: " + ErrMsg +
+                        "\n";
+        else
+          errs() << "input-gen: gen binary compilation failed.\n";
+        return false;
+      }
     }
 
     return true;
