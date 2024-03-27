@@ -485,7 +485,7 @@ void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
 
   FunctionType *MainTy = FunctionType::get(Int32Ty, {Int32Ty, PtrTy}, false);
   auto *MainFn =
-      Function::Create(MainTy, GlobalValue::ExternalLinkage, "main", M);
+      Function::Create(MainTy, GlobalValue::ExternalLinkage, "__inputgen_entry", M);
   auto *EntryBB = BasicBlock::Create(*Ctx, "entry", MainFn);
 
   auto *RI =

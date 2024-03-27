@@ -5,7 +5,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fstream>
+#include <iostream>
 #include <map>
+#include <omp.h>
+#include <random>
 #include <type_traits>
 #include <vector>
 
@@ -75,10 +79,19 @@ struct HeapTy : ObjectTy {
 };
 
 struct InputGenRTTy {
-  InputGenRTTy() : Heap(new HeapTy()) {}
+  InputGenRTTy(const char *OutputDir, int Seed)
+      : Seed(Seed), OutputDir(OutputDir), Heap(new HeapTy()) {
+    Gen.seed(Seed);
+  }
   ~InputGenRTTy() { report(); }
 
+  int Seed;
+  std::string OutputDir;
+  std::mt19937 Gen;
+  std::uniform_int_distribution<> Rand;
   std::vector<char> Conds;
+
+  int rand() { return Rand(Gen); }
 
   void *getNewObj(uint64_t Size, bool Artifical) {
     void *Loc;
@@ -119,12 +132,36 @@ struct InputGenRTTy {
   HeapTy *Heap;
 
   void report() {
-    printf("Args (%zu total)\n", Args.size());
+    if (OutputDir == "-") {
+      report(stdout, stderr);
+    } else {
+      std::string ReportOut(OutputDir + "/" + "report." + std::to_string(Seed) + ".c");
+      std::string CodeOut(OutputDir + "/" + "code." + std::to_string(Seed) + ".c");
+      FILE *ReportOutFD = fopen(ReportOut.c_str(), "w");
+      if (!ReportOutFD) {
+        fprintf(stderr, "Could not open %s\n", ReportOut.c_str());
+        return;
+      }
+      FILE *CodeOutFD = fopen(CodeOut.c_str(), "w");;
+      if (!CodeOutFD) {
+        fprintf(stderr, "Could not open %s\n", CodeOut.c_str());
+        fclose(ReportOutFD);
+        return;
+      }
+      report(ReportOutFD, CodeOutFD);
+      fclose(ReportOutFD);
+      fclose(CodeOutFD);
+    }
+  }
+
+  void report(FILE *ReportOut, FILE *CodeOut) {
+
+    fprintf(ReportOut, "Args (%zu total)\n", Args.size());
     for (size_t I = 0; I < Args.size(); ++I)
-      printf("Arg %zu: %lu\n", I, Args[I]);
-    printf("\nNum new values: %lu\n", NumNewValues);
-    printf("\nHeap PtrMap: %lu\n", Heap->PtrMap.size());
-    printf("\nObjects (%zu total)\n", ObjMap.size());
+      fprintf(ReportOut, "Arg %zu: %lu\n", I, Args[I]);
+    fprintf(ReportOut, "\nNum new values: %lu\n", NumNewValues);
+    fprintf(ReportOut, "\nHeap PtrMap: %lu\n", Heap->PtrMap.size());
+    fprintf(ReportOut, "\nObjects (%zu total)\n", ObjMap.size());
 
     uintptr_t Min = -1, Max = 0;
     for (auto &It : ObjMap) {
@@ -142,18 +179,18 @@ struct InputGenRTTy {
       }
       if (ObjLIt == ObjRIt)
         continue;
-      printf("Obj [%p : %p] %lu)\n", ObjLIt, ObjRIt,
+      fprintf(ReportOut, "Obj [%p : %p] %lu)\n", ObjLIt, ObjRIt,
              ((char *)ObjRIt - (char *)ObjLIt));
       Min = std::min(Min, uintptr_t(ObjLIt));
       Max = std::max(Max, uintptr_t(ObjRIt));
     }
-    printf("Heap %p : Min %p :: Max %p\n", Heap->begin(), (void *)Min,
+    fprintf(ReportOut, "Heap %p : Min %p :: Max %p\n", Heap->begin(), (void *)Min,
            (void *)Max);
-    printf("%lu\n", (char *)Min - (char *)Heap->begin());
+    fprintf(ReportOut, "%lu\n", (char *)Min - (char *)Heap->begin());
 
-    fprintf(stderr, "#include <stdint.h>\n");
-    fprintf(stderr, "  char Memory[] = {");
-    //    printf("  uintptr_t MemoryDiff = (uintptr_t)Memory -
+    fprintf(CodeOut, "#include <stdint.h>\n");
+    fprintf(CodeOut, "  char Memory[] = {");
+    //    fprintf(ReportOut, "  uintptr_t MemoryDiff = (uintptr_t)Memory -
     //    (uintptr_t)%p;\n", Heap->begin());
     std::map<int, void *> Remap;
     std::map<void *, int> Repos;
@@ -181,55 +218,59 @@ struct InputGenRTTy {
           Remap[Idx] = PtrIt->second;
         }
         if (Idx)
-          fprintf(stderr, ",%i", (int)*(char *)ObjLIt);
+          fprintf(CodeOut, ",%i", (int)*(char *)ObjLIt);
         else
-          fprintf(stderr, "%i", (int)*(char *)ObjLIt);
+          fprintf(CodeOut, "%i", (int)*(char *)ObjLIt);
         ObjLIt = advance(ObjLIt, sizeof(char));
         ++Idx;
       }
     }
-    fprintf(stderr, "};\n\n");
-    fprintf(stderr, "char Conds[] = {");
+    fprintf(CodeOut, "};\n\n");
+    fprintf(CodeOut, "char Conds[] = {");
     Idx = 0;
     char C = 0;
-    printf("Conds: %zu\n", Conds.size());
+    fprintf(ReportOut, "Conds: %zu\n", Conds.size());
     while (Idx < Conds.size()) {
       auto Rem = Idx % 8;
-      printf(" %i : %i : %i\n", C, Conds[Idx], Conds[Idx] << Rem);
+      fprintf(ReportOut, " %i : %i : %i\n", C, Conds[Idx], Conds[Idx] << Rem);
       C |= (Conds[Idx] << Rem);
-      printf("=%i : %i : %i\n", C, Conds[Idx], Conds[Idx] << Rem);
+      fprintf(ReportOut, "=%i : %i : %i\n", C, Conds[Idx], Conds[Idx] << Rem);
       Idx++;
       if ((Idx % 8) == 0) {
         if (Idx > 8)
-          fprintf(stderr, ",");
-        fprintf(stderr, "%i", (int)C);
+          fprintf(CodeOut, ",");
+        fprintf(CodeOut, "%i", (int)C);
         C = 0;
       }
     }
     if ((Idx % 8) != 0) {
       if (Idx > 8)
-        fprintf(stderr, ",");
-      fprintf(stderr, "%i", (int)C);
+        fprintf(CodeOut, ",");
+      fprintf(CodeOut, "%i", (int)C);
     }
-    fprintf(stderr, "};\n\n");
-    fprintf(stderr, "struct LinkedList;\n\n");
-    fprintf(stderr, "extern \"C\" void foo(LinkedList*);\n\n");
-    fprintf(stderr, "int main() {\n");
+    fprintf(CodeOut, "};\n\n");
+    fprintf(CodeOut, "struct LinkedList;\n\n");
+    fprintf(CodeOut, "extern \"C\" void foo(LinkedList*);\n\n");
+    fprintf(CodeOut, "int main() {\n");
     for (auto &It : Remap) {
       if (Repos.count(It.second))
-        fprintf(stderr, "  *((void**)&Memory[%i]) = (void*)&Memory[%i];\n",
+        fprintf(CodeOut, "  *((void**)&Memory[%i]) = (void*)&Memory[%i];\n",
                 It.first, Repos[It.second]);
     }
-    fprintf(stderr, "  foo((LinkedList*)(Memory + %lu));\n",
+    fprintf(CodeOut, "  foo((LinkedList*)(Memory + %lu));\n",
             (char *)Args[0] - (char *)Min);
-    fprintf(stderr, "}\n");
+    fprintf(CodeOut, "}\n");
   }
+};
 
-} InputGenRT;
+static InputGenRTTy *InputGenRT;
+#pragma omp threadprivate(InputGenRT)
+
+static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T> T HeapTy::read(void *Ptr, void *Base) {
   if (!isUsed(Ptr, sizeof(T))) {
-    write((T *)Ptr, InputGenRT.getNewValue<T>(), sizeof(T), true);
+    write((T *)Ptr, getInputGenRT().getNewValue<T>(), sizeof(T), true);
     assert(isUsed(Ptr, sizeof(T)));
   }
   if (begin() <= Ptr && advance(Ptr, sizeof(T)) < end()) {
@@ -246,20 +287,16 @@ extern "C" {
 void __inputgen_version_mismatch_check_v1() {}
 
 void __inputgen_init() {
-  printf("Init\n");
-  unsigned int Seed = time(NULL);
-  if (char *EnvVar = getenv("INPUT_GEN_SEED"))
-    Seed = atoi(EnvVar);
-  srand(Seed);
+  // getInputGenRT().init();
 }
 
 #define READ(TY)                                                               \
   void __inputgen_read_##TY(void *Ptr, int32_t Size, void *Base) {             \
     if (Size == sizeof(void *)) {                                              \
-      void *V = InputGenRT.Heap->read<void *>(Ptr, Base);                      \
+      void *V = getInputGenRT().Heap->read<void *>(Ptr, Base);                 \
       printf("Read %p[:%i] (%p): %p\n", Ptr, Size, Base, V);                   \
     } else {                                                                   \
-      int32_t V = InputGenRT.Heap->read<int32_t>(Ptr, Base);                   \
+      int32_t V = getInputGenRT().Heap->read<int32_t>(Ptr, Base);              \
       printf("Read %p[:%i] (%p): %i\n", Ptr, Size, Base, V);                   \
     }                                                                          \
   }
@@ -276,8 +313,9 @@ READ(ptr)
 
 #define ARG(TY, NAME)                                                          \
   TY __inputgen_arg_##NAME() {                                                 \
-    InputGenRT.Args.push_back(uintptr_t(InputGenRT.getNewValue<TY>()));        \
-    return (TY)InputGenRT.Args.back();                                         \
+    getInputGenRT().Args.push_back(                                            \
+        uintptr_t(getInputGenRT().getNewValue<TY>()));                         \
+    return (TY)getInputGenRT().Args.back();                                    \
   }
 
 ARG(bool, i1)
@@ -289,4 +327,37 @@ ARG(float, float)
 ARG(double, double)
 ARG(void *, ptr)
 #undef ARG
+
+void __inputgen_entry(int, char **);
+}
+
+int main(int argc, char **argv) {
+  const char *OutputDir = "-";
+  int Start = 0;
+  int End = 1;
+
+  if (argc == 4) {
+    OutputDir = argv[1];
+    Start = std::stoi(argv[2]);
+    End = std::stoi(argv[3]);
+  } else if (argc != 1) {
+    std::cerr << "Wrong usage." << std::endl;
+    return 1;
+  }
+
+  int Size = End - Start;
+  if (Size <= 0)
+    return 1;
+
+  std::cout << "Will generate " << Size << " inputs." << std::endl;
+
+#pragma omp parallel for schedule(dynamic, 5)
+  for (int I = Start; I < End; I++) {
+    InputGenRTTy LocalInputGenRT(OutputDir, I);
+    InputGenRT = &LocalInputGenRT;
+    printf(".");
+    __inputgen_entry(argc, argv);
+  }
+
+  return 0;
 }

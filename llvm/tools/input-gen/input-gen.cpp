@@ -191,6 +191,7 @@ public:
     if (CompileInputGenExecutable) {
       outs() << "Compiling " << InstrumentedModule << "\n";
       SmallVector<StringRef, 8> Args = {Clang,
+                                        "-fopenmp",
                                         "-O2",
                                         InputGenRuntime,
                                         InstrumentedModule,
