@@ -30,8 +30,10 @@ cl::OptionCategory InputGenCategory("input-gen Options");
 static cl::opt<std::string> OutputDir("output-dir", cl::Required,
                                       cl::cat(InputGenCategory));
 
-static cl::opt<std::string> InputGenDriver("input-gen-driver", cl::Required,
-                                           cl::cat(InputGenCategory));
+static cl::opt<std::string> InputGenRuntime(
+    "input-gen-runtime",
+    cl::desc("Input gen runtime to link into the instrumented module."),
+    cl::cat(InputGenCategory));
 
 static cl::opt<std::string> InputFilename(cl::Positional,
                                           cl::desc("Input file"),
@@ -39,11 +41,6 @@ static cl::opt<std::string> InputFilename(cl::Positional,
 
 static cl::opt<bool> CompileInputGenExecutable("compile-input-gen-executable",
                                                cl::cat(InputGenCategory));
-
-namespace llvm {
-cl::opt<bool> SaveTemps("save-temps", cl::init(false),
-                        cl::desc("Save temporary files"));
-}
 
 constexpr char ToolName[] = "input-gen";
 
@@ -97,21 +94,6 @@ ErrorOr<std::string> findClang(const char *Argv0, StringRef Triple) {
   return Path;
 }
 
-struct DiscardTemp {
-  sys::fs::TempFile &File;
-  ~DiscardTemp();
-};
-
-DiscardTemp::~DiscardTemp() {
-  if (SaveTemps) {
-    if (Error E = File.keep())
-      errs() << "Failed to keep temp file " << toString(std::move(E)) << '\n';
-    return;
-  }
-  if (Error E = File.discard())
-    errs() << "Failed to delete temp file " << toString(std::move(E)) << '\n';
-}
-
 static bool writeProgramToFile(int FD, const Module &M) {
   raw_fd_ostream OS(FD, /*shouldClose*/ false);
   WriteBitcodeToFile(M, OS, /*ShouldPreserveUseListOrder*/ false);
@@ -129,6 +111,10 @@ public:
   InputGenOrchestration(Module &M) : M(M){};
   void init(int Argc, char **Argv) {
     if (CompileInputGenExecutable) {
+      if (InputGenRuntime.empty())
+        fatalError("input-gen: Need to specify input-gen runtime to compile "
+                   "executable.");
+
       ErrorOr<std::string> ClangOrErr =
           findClang(Argv[0], "ignoring-this-for-now");
       if (ClangOrErr) {
@@ -176,7 +162,8 @@ public:
         OutputDir + "/" + Name + ".input_gen_executable";
 
     int InstrumentedModuleFD;
-    std::error_code EC = sys::fs::openFileForWrite(InstrumentedModule, InstrumentedModuleFD);
+    std::error_code EC =
+        sys::fs::openFileForWrite(InstrumentedModule, InstrumentedModuleFD);
     if (EC)
       // errc::permission_denied happens on Windows when we try to open a file
       // that has been marked for deletion.
@@ -193,9 +180,12 @@ public:
 
     if (CompileInputGenExecutable) {
       outs() << "Compiling " << InstrumentedModule << "\n";
-      SmallVector<StringRef, 8> Args = {Clang,          "-O2",
-                                        InputGenDriver, InstrumentedModule,
-                                        "-o",           InputGenExecutable};
+      SmallVector<StringRef, 8> Args = {Clang,
+                                        "-O2",
+                                        InputGenRuntime,
+                                        InstrumentedModule,
+                                        "-o",
+                                        InputGenExecutable};
       std::string ErrMsg;
       int Res = sys::ExecuteAndWait(
           Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
