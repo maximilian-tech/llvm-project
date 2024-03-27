@@ -17,6 +17,8 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
+#include <cstdio>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -127,10 +129,17 @@ public:
   }
 
   void genForAllFunctions() {
-    // maybe we can parallelize this loop
+    // TODO Use proper path concat function
+    std::string Functions =
+        OutputDir + "/" + "available_functions";
+    auto Fs = std::ofstream(Functions);
+
+    // TODO Maybe we can parallelize this loop
     for (auto &F : M.getFunctionList()) {
       if (F.isDeclaration())
         continue;
+
+      Fs << F.getName().str() << std::endl;
 
       ValueToValueMapTy VMap;
       auto ClonedModule = CloneModule(M, VMap);
@@ -144,22 +153,23 @@ public:
       }
       llvm::outs() << "Instrumenting succeeded\n";
 
-      llvm::outs() << "Generating input...\n";
+      llvm::outs() << "Generating input module...\n";
 
-      if (generateInput(*ClonedModule, ClonedF)) {
-        llvm::outs() << "Generating input succeeded\n";
+      if (generateInputModule(*ClonedModule, ClonedF)) {
+        llvm::outs() << "Generating input module succeeded\n";
       } else {
-        llvm::outs() << "Generating input failed\n";
+        llvm::outs() << "Generating input module failed\n";
       }
     }
   }
-  bool generateInput(Module &M, Function &F) {
+
+  bool generateInputModule(Module &M, Function &F) {
     std::string Name = F.getName().str();
     // TODO Use proper path concat function
     std::string InstrumentedModule =
-        OutputDir + "/" + Name + ".instrumented.bc";
+        OutputDir + "/" + "input-gen." + Name + ".instrumented.bc";
     std::string InputGenExecutable =
-        OutputDir + "/" + Name + ".input_gen_executable";
+        OutputDir + "/" + "input-gen." + Name +  ".executable";
 
     int InstrumentedModuleFD;
     std::error_code EC =

@@ -247,7 +247,10 @@ void __inputgen_version_mismatch_check_v1() {}
 
 void __inputgen_init() {
   printf("Init\n");
-  srand(time(NULL));
+  unsigned int Seed = time(NULL);
+  if (char *EnvVar = getenv("INPUT_GEN_SEED"))
+    Seed = atoi(EnvVar);
+  srand(Seed);
 }
 
 #define READ(TY)                                                               \
