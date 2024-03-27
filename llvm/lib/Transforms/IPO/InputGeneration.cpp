@@ -36,6 +36,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/Support/BLAKE3.h"
@@ -115,8 +116,6 @@ struct InterestingMemoryAccess {
       return "read";
     case READ_THEN_WRITE:
       return "read_write";
-    default:
-      break;
     }
     llvm_unreachable("Unknown kind");
   }
@@ -180,6 +179,7 @@ public:
   }
 
   bool instrumentModule(Module &);
+  bool instrumentModuleForFunction(Module &, Function &);
 
 private:
   Triple TargetTriple;
@@ -190,6 +190,28 @@ private:
 } // end anonymous namespace
 
 InputGenerationInstrumentPass::InputGenerationInstrumentPass() = default;
+
+namespace llvm {
+bool inputGenerationInstrumentModuleForFunction(Function &F) {
+  Module &M = *F.getParent();
+
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+
+  PassBuilder PB;
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  ModuleInputGenInstrumenter Profiler(M, MAM);
+  return Profiler.instrumentModuleForFunction(M, F);
+}
+} // namespace llvm
 
 PreservedAnalyses
 InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &AM) {
@@ -360,13 +382,17 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
     errs() << "No entry point found, used \"" << ClEntryPoint << "\".\n";
     return false;
   }
-  if (EntryPoint->isDeclaration()) {
+  return instrumentModuleForFunction(M, *EntryPoint);
+}
+
+bool ModuleInputGenInstrumenter::instrumentModuleForFunction(Module &M, Function &EntryPoint) {
+  if (EntryPoint.isDeclaration()) {
     errs() << "Entry point is declaration, used \"" << ClEntryPoint << "\".\n";
     return false;
   }
 
-  IGI.instrumentEntryPoint(*EntryPoint);
-  IGI.createRecordingEntryPoint(*EntryPoint);
+  IGI.instrumentEntryPoint(EntryPoint);
+  IGI.createRecordingEntryPoint(EntryPoint);
 
   // Create a module constructor.
   std::string InputGenVersion = std::to_string(LLVM_INPUT_GEN_VERSION);
