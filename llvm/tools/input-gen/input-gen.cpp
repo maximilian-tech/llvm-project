@@ -5,7 +5,9 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
@@ -47,7 +49,9 @@ static cl::opt<bool> CompileInputGenExecutable("compile-input-gen-executable",
 constexpr char ToolName[] = "input-gen";
 
 namespace llvm {
-bool inputGenerationInstrumentModuleForFunction(Function &F);
+bool inputGenerationInstrumentModuleForFunction(Function &F,
+                                                ModuleAnalysisManager &MAM);
+
 } // namespace llvm
 
 [[noreturn]] static void fatalError(const Twine &Message) {
@@ -145,9 +149,22 @@ public:
       auto ClonedModule = CloneModule(M, VMap);
       auto &ClonedF = *cast<Function>(VMap[&F]);
 
+      LoopAnalysisManager LAM;
+      FunctionAnalysisManager FAM;
+      CGSCCAnalysisManager CGAM;
+      ModuleAnalysisManager MAM;
+
+      PassBuilder PB;
+
+      PB.registerModuleAnalyses(MAM);
+      PB.registerCGSCCAnalyses(CGAM);
+      PB.registerFunctionAnalyses(FAM);
+      PB.registerLoopAnalyses(LAM);
+      PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
       llvm::outs() << "Handling function @" << ClonedF.getName() << "\n";
       llvm::outs() << "Instrumenting...\n";
-      if (!inputGenerationInstrumentModuleForFunction(ClonedF)) {
+      if (!inputGenerationInstrumentModuleForFunction(ClonedF, MAM)) {
         llvm::outs() << "Instrumenting failed\n";
         continue;
       }

@@ -36,7 +36,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Passes/PassBuilder.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/Support/BLAKE3.h"
@@ -71,7 +70,7 @@ static std::string InputGenOutputFilename = "input_gen_%{fn}_%{uuid}.c";
 static cl::opt<bool> IGRecording(
     "input-gen-record",
     cl::desc("Instrument for recording inputs, not generating them."),
-    cl::Hidden, cl::init(true));
+    cl::Hidden, cl::init(false));
 
 static cl::opt<bool> ClInsertVersionCheck(
     "input-gen-guard-against-version-mismatch",
@@ -201,22 +200,9 @@ private:
 InputGenerationInstrumentPass::InputGenerationInstrumentPass() = default;
 
 namespace llvm {
-bool inputGenerationInstrumentModuleForFunction(Function &F) {
+bool inputGenerationInstrumentModuleForFunction(Function &F,
+                                                ModuleAnalysisManager &MAM) {
   Module &M = *F.getParent();
-
-  LoopAnalysisManager LAM;
-  FunctionAnalysisManager FAM;
-  CGSCCAnalysisManager CGAM;
-  ModuleAnalysisManager MAM;
-
-  PassBuilder PB;
-
-  PB.registerModuleAnalyses(MAM);
-  PB.registerCGSCCAnalyses(CGAM);
-  PB.registerFunctionAnalyses(FAM);
-  PB.registerLoopAnalyses(LAM);
-  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
   ModuleInputGenInstrumenter Profiler(M, MAM);
   return Profiler.instrumentModuleForFunction(M, F);
 }

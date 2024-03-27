@@ -70,7 +70,7 @@ struct HeapTy : ObjectTy {
     } else if (LastHeap) {
       LastHeap->write(Ptr, Val, Size, DueToRead);
     } else {
-      printf("Out of bound write at %p\n", (void *)Ptr);
+      //      printf("Out of bound write at %p\n", (void *)Ptr);
       // exit(1);
     }
   }
@@ -114,7 +114,7 @@ struct InputGenRTTy {
   template <> void *getNewValue<void *>(int Max) {
     NumNewValues++;
     memset(Storage, 0, 64);
-    if (rand() % 12) {
+    if (rand() % 1000) {
       *reinterpret_cast<void **>(Storage) = getNewObj(1024 * 1024, true);
     }
     void *V = *((void **)(Storage));
@@ -257,8 +257,7 @@ struct InputGenRTTy {
         fprintf(CodeOut, "  *((void**)&Memory[%i]) = (void*)&Memory[%i];\n",
                 It.first, Repos[It.second]);
     }
-    fprintf(CodeOut, "  foo((LinkedList*)(Memory + %lu));\n",
-            (char *)Args[0] - (char *)Min);
+    fprintf(CodeOut, "  foo((LinkedList*)(Memory));\n");
     fprintf(CodeOut, "}\n");
   }
 };
@@ -269,18 +268,19 @@ static InputGenRTTy *InputGenRT;
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T> T HeapTy::read(void *Ptr, void *Base) {
+  if (begin() > Ptr || advance(Ptr, sizeof(T)) >= end()) {
+    if (LastHeap)
+      return LastHeap->read<T>(Ptr, Base);
+    //    printf("Out of bound read at %p < %p:%p < %p\n", begin(), Ptr,
+    //           advance(Ptr, sizeof(T)), end());
+    return *reinterpret_cast<T *>(Ptr);
+  }
   if (!isUsed(Ptr, sizeof(T))) {
     write((T *)Ptr, getInputGenRT().getNewValue<T>(), sizeof(T), true);
     assert(isUsed(Ptr, sizeof(T)));
   }
-  if (begin() <= Ptr && advance(Ptr, sizeof(T)) < end()) {
-    return *reinterpret_cast<T *>(Ptr);
-  }
-  if (LastHeap)
-    return LastHeap->read<T>(Ptr, Base);
-  printf("Out of bound read at %p < %p:%p < %p\n", begin(), Ptr,
-         advance(Ptr, sizeof(T)), end());
-  exit(1);
+  assert(begin() <= Ptr && advance(Ptr, sizeof(T)) < end());
+  return *reinterpret_cast<T *>(Ptr);
 }
 
 extern "C" {
@@ -289,10 +289,25 @@ void __inputgen_version_mismatch_check_v1() {}
 void __inputgen_init() {
   // getInputGenRT().init();
 }
+void __inputgen_deinit() {
+  // getInputGenRT().init();
+}
 
 #define RW(TY, NAME)                                                           \
   void __inputgen_read_##NAME(void *Ptr, int64_t Val, int32_t Size,            \
                               void *Base) {                                    \
+    if (Size == sizeof(void *)) {                                              \
+      void *V = getInputGenRT().Heap->read<void *>(Ptr, Base);                 \
+    } else {                                                                   \
+      int32_t V = getInputGenRT().Heap->read<int32_t>(Ptr, Base);              \
+    }                                                                          \
+  }                                                                            \
+  void __inputgen_write_##NAME(void *Ptr, int64_t Val, int32_t Size,           \
+                               void *Base) {                                   \
+    getInputGenRT().Heap->write<TY>((TY *)Ptr, (TY)Val, Size);                 \
+  }                                                                            \
+  void __record_read_##NAME(void *Ptr, int64_t Val, int32_t Size,              \
+                            void *Base) {                                      \
     if (Size == sizeof(void *)) {                                              \
       void *V = getInputGenRT().Heap->read<void *>(Ptr, Base);                 \
       printf("Read %p[:%i] (%p): %p\n", Ptr, Size, Base, V);                   \
@@ -301,23 +316,9 @@ void __inputgen_init() {
       printf("Read %p[:%i] (%p): %i\n", Ptr, Size, Base, V);                   \
     }                                                                          \
   }                                                                            \
-  void __inputgen_write_##NAME(void *Ptr, int64_t Val, int32_t Size,           \
-                               void *Base) {                                   \
-    InputGenRT.Heap->write<TY>((TY *)Ptr, (TY)Val, Size);                      \
-  }                                                                            \
-  void __record_read_##NAME(void *Ptr, int64_t Val, int32_t Size,              \
-                            void *Base) {                                      \
-    if (Size == sizeof(void *)) {                                              \
-      void *V = InputGenRT.Heap->read<void *>(Ptr, Base);                      \
-      printf("Read %p[:%i] (%p): %p\n", Ptr, Size, Base, V);                   \
-    } else {                                                                   \
-      int32_t V = InputGenRT.Heap->read<int32_t>(Ptr, Base);                   \
-      printf("Read %p[:%i] (%p): %i\n", Ptr, Size, Base, V);                   \
-    }                                                                          \
-  }                                                                            \
   void __record_write_##NAME(void *Ptr, int64_t Val, int32_t Size,             \
                              void *Base) {                                     \
-    InputGenRT.Heap->write<TY>((TY *)Ptr, (TY)Val, Size);                      \
+    getInputGenRT().Heap->write<TY>((TY *)Ptr, (TY)Val, Size);                 \
   }
 
 RW(bool, i1)
@@ -331,9 +332,10 @@ RW(void *, ptr)
 #undef RW
 
 #define ARG(TY, NAME)                                                          \
-  TY __inputgen_arg_##NAME(TY Arg) {                                                 \
+  TY __inputgen_arg_##NAME(TY Arg) {                                           \
     getInputGenRT().Args.push_back(                                            \
         uintptr_t(getInputGenRT().getNewValue<TY>()));                         \
+    printf("arg %p\n", (void *)getInputGenRT().Args.back());                   \
     return (TY)getInputGenRT().Args.back();                                    \
   }
 
