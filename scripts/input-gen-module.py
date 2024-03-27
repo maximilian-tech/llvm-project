@@ -23,10 +23,11 @@ if __file__ == '__main__':
         '--output-dir', args.outputdir,
         args.inputmodule,
         '--compile-input-gen-executable',
-    ])
+    ], check=True)
 
     with open(os.path.join(args.outputdir, 'available_functions')) as available_functions_file:
         for func in available_functions_file.readlines():
+            # TODO timeouts here?
             inputgen_exe = os.path.join(args.outputdir, 'input-gen.' + func + '.executable')
             func_inputs_dir = os.path.join(args.targetdir, 'input-gen.' + func + '.inputs')
             os.makedirs(func_inputs_dir)
@@ -34,4 +35,4 @@ if __file__ == '__main__':
                 inputgen_exe,
                 func_inputs_dir,
                 '0', str(args.num)
-            ])
+            ], check=True)
