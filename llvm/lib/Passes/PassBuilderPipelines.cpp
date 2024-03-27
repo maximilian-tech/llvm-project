@@ -57,6 +57,7 @@
 #include "llvm/Transforms/IPO/IROutliner.h"
 #include "llvm/Transforms/IPO/InferFunctionAttrs.h"
 #include "llvm/Transforms/IPO/Inliner.h"
+#include "llvm/Transforms/IPO/InputGeneration.h"
 #include "llvm/Transforms/IPO/LowerTypeTests.h"
 #include "llvm/Transforms/IPO/MemProfContextDisambiguation.h"
 #include "llvm/Transforms/IPO/MergeFunctions.h"
@@ -181,6 +182,8 @@ static cl::opt<bool> EnableMergeFunctions(
 static cl::opt<bool> EnablePostPGOLoopRotation(
     "enable-post-pgo-loop-rotation", cl::init(true), cl::Hidden,
     cl::desc("Run the loop rotation transformation after PGO instrumentation"));
+
+static cl::opt<bool> UseInputGen("include-input-gen", cl::desc(""));
 
 static cl::opt<bool> EnableGlobalAnalyses(
     "enable-global-analyses", cl::init(true), cl::Hidden,
@@ -1164,6 +1167,9 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
 
   if (EnablePGOForceFunctionAttrs)
     MPM.addPass(PGOForceFunctionAttrsPass(PGOOpt->ColdOptType));
+
+  if (UseInputGen)
+    MPM.addPass(InputGenerationInstrumentPass());
 
   MPM.addPass(AlwaysInlinerPass(/*InsertLifetimeIntrinsics=*/true));
 
