@@ -40,6 +40,7 @@ static cl::opt<std::string> InputGenRuntime(
     cl::cat(InputGenCategory));
 
 static cl::opt<std::string> InputFilename(cl::Positional,
+                                          cl::init("-"),
                                           cl::desc("Input file"),
                                           cl::cat(InputGenCategory));
 
