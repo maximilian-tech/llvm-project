@@ -245,25 +245,30 @@ struct InputGenRTTy {
         ++Idx;
       }
     }
-    auto CurrentPos = InputOut.tellp();
+    auto AfterMemory = InputOut.tellp();
     InputOut.seekp(0);
     writeSingleEl(InputOut, Idx);
-    InputOut.seekp(CurrentPos);
+    InputOut.seekp(AfterMemory);
+
+    uint64_t RemapNum = 0;
+    // We will write the RemapNum here later
+    InputOut.seekp(sizeof(RemapNum), std::ios_base::cur);
 
     for (auto &It : Remap) {
       if (Repos.count(It.second)) {
-        // Repo coming
-        InputOut.write("!", 1);
         writeSingleEl(InputOut, It.first);
         writeSingleEl(InputOut, Repos[It.second]);
+        RemapNum++;
       }
       auto Arg = std::find(Args.begin(), Args.end(), toArgTy(It.second));
       if (Arg != Args.end()) {
         *Arg = Repos[It.second];
       }
     }
-    // Repos over
-    InputOut.write("\0", 1);
+    auto AfterRemap = InputOut.tellp();
+    InputOut.seekp(AfterMemory);
+    writeSingleEl(InputOut, RemapNum);
+    InputOut.seekp(AfterRemap);
 
     uint64_t ArgsSize = Args.size() * sizeof(Args[0]);
     writeSingleEl(InputOut, ArgsSize);

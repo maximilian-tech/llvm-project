@@ -25,16 +25,10 @@ int main(int argc, char **argv) {
   char *Memory = ccast(malloc(MemSize));
   Input.read(ccast(Memory), MemSize);
 
-  // Relocations
-  while (true) {
-    auto RelocationLeft = readSingleEl<bool>(Input);
-    if (!RelocationLeft)
-      break;
-
+  auto RemapNum = readSingleEl<uint64_t>(Input);
+  for (uint64_t I = 0; I < RemapNum; I++) {
     auto From = readSingleEl<uint64_t>(Input);
     auto To = readSingleEl<uint64_t>(Input);
-    Input.read(ccast(&From), sizeof(From));
-    Input.read(ccast(&To), sizeof(To));
 
     *((void **)&Memory[From]) = (void *)&Memory[To];
   }
