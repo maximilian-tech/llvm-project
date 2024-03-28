@@ -5,6 +5,10 @@ target triple = "x86_64-unknown-linux-gnu"
 
 @.str = private unnamed_addr constant [20 x i8] c"Length: %i, sum %i\0A\00", align 1, !dbg !0
 
+define dso_local void @baz(ptr noundef readonly %LL) local_unnamed_addr #0 {
+entry:
+  ret void
+}
 define dso_local void @bar(ptr noundef readonly %LL) local_unnamed_addr #0 {
 entry:
   tail call void @llvm.dbg.value(metadata ptr %LL, metadata !30, metadata !DIExpression()), !dbg !33
