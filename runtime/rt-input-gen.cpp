@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <bitset>
 #include <cassert>
 #include <cstdint>
@@ -26,6 +27,21 @@ struct ObjectTy {
   void *begin() { return Data; }
   void *end() { return advance(Data, Size); }
 };
+
+typedef uintptr_t ArgTy;
+template <typename T> static T fromArgTy(ArgTy U) {
+  static_assert(sizeof(T) <= sizeof(U));
+  T A;
+  memcpy(&A, &U, sizeof(A));
+  return A;
+}
+
+template <typename T> static ArgTy toArgTy(T A) {
+  ArgTy U;
+  static_assert(sizeof(T) <= sizeof(U));
+  memcpy(&U, &A, sizeof(A));
+  return U;
+}
 
 static constexpr uint64_t HeapSize = 1UL << 32;
 
@@ -124,7 +140,7 @@ struct InputGenRTTy {
   uint64_t NumNewValues = 0;
   char Storage[64];
 
-  std::vector<uintptr_t> Args;
+  std::vector<ArgTy> Args;
 
   ObjectTy *LastObj = 0;
   std::map<void *, ObjectTy *> ObjMap;
@@ -155,6 +171,10 @@ struct InputGenRTTy {
 
   template <typename T> const char *ccast(T *Ptr) {
     return reinterpret_cast<const char *>(Ptr);
+  }
+  template <typename T> T writeSingleEl(std::ofstream &Output, T El) {
+    Output.write(ccast(&El), sizeof(El));
+    return El;
   }
 
   void report(FILE *ReportOut, std::ofstream &InputOut) {
@@ -190,11 +210,10 @@ struct InputGenRTTy {
             (void *)Min, (void *)Max);
     fprintf(ReportOut, "%lu\n", (char *)Min - (char *)Heap->begin());
 
-    std::map<int, void *> Remap;
-    std::map<void *, int> Repos;
+    std::map<uint64_t, void *> Remap;
+    std::map<void *, uint64_t> Repos;
     uintptr_t Idx = 0;
-    uint64_t ObjNum = ObjMap.size();
-    InputOut.write(reinterpret_cast<const char *>(&ObjNum), sizeof(ObjNum));
+    InputOut.seekp(sizeof(Idx));
     for (auto &It : ObjMap) {
       auto *ObjLIt = It.second->begin();
       auto *ObjRIt = It.second->end();
@@ -212,7 +231,7 @@ struct InputGenRTTy {
       //   continue;
       uint64_t Size =
           reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
-      InputOut.write(reinterpret_cast<const char *>(&Size), sizeof(Size));
+      writeSingleEl(InputOut, Size);
       InputOut.write(reinterpret_cast<const char *>(ObjLIt), Size);
 
       Repos[It.second->begin()] = Idx;
@@ -226,15 +245,29 @@ struct InputGenRTTy {
         ++Idx;
       }
     }
+    auto CurrentPos = InputOut.tellp();
+    InputOut.seekp(0);
+    writeSingleEl(InputOut, Idx);
+    InputOut.seekp(CurrentPos);
 
     for (auto &It : Remap) {
       if (Repos.count(It.second)) {
+        // Repo coming
         InputOut.write("!", 1);
-        InputOut.write(ccast(&It.first), sizeof(It.first));
-        InputOut.write(ccast(&Repos[It.second]), sizeof(Repos[It.second]));
+        writeSingleEl(InputOut, It.first);
+        writeSingleEl(InputOut, Repos[It.second]);
+      }
+      auto Arg = std::find(Args.begin(), Args.end(), toArgTy(It.second));
+      if (Arg != Args.end()) {
+        *Arg = Repos[It.second];
       }
     }
+    // Repos over
     InputOut.write("\0", 1);
+
+    uint64_t ArgsSize = Args.size() * sizeof(Args[0]);
+    writeSingleEl(InputOut, ArgsSize);
+    InputOut.write(ccast(Args.data()), ArgsSize);
   }
 };
 
@@ -310,14 +343,14 @@ RW(void *, ptr)
 #define ARG(TY, NAME)                                                          \
   TY __inputgen_arg_##NAME(TY Arg) {                                           \
     getInputGenRT().Args.push_back(                                            \
-        uintptr_t(getInputGenRT().getNewValue<TY>()));                         \
+        toArgTy<TY>(getInputGenRT().getNewValue<TY>()));                       \
     printf("arg %p\n", (void *)getInputGenRT().Args.back());                   \
-    return (TY)getInputGenRT().Args.back();                                    \
+    return fromArgTy<TY>(getInputGenRT().Args.back());                         \
   }
 
 ARG(bool, i1)
 ARG(char, i8)
-ARG(short, 16)
+ARG(short, i16)
 ARG(int32_t, i32)
 ARG(int64_t, i64)
 ARG(float, float)
