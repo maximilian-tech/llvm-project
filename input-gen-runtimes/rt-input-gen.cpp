@@ -48,7 +48,7 @@ static constexpr uint64_t HeapSize = 1UL << 32;
 struct HeapTy : ObjectTy {
   HeapTy(HeapTy *LastHeap = nullptr)
       : ObjectTy(malloc(HeapSize), HeapSize), LastHeap(LastHeap) {
-    printf("New heap [%p:%p)\n", begin(), end());
+    //    printf("New heap [%p:%p)\n", begin(), end());
   }
   HeapTy *LastHeap = nullptr;
 
@@ -361,7 +361,6 @@ RW(void *, ptr)
   TY __inputgen_arg_##NAME(TY Arg) {                                           \
     getInputGenRT().Args.push_back(                                            \
         toArgTy<TY>(getInputGenRT().getNewValue<TY>()));                       \
-    printf("arg %p\n", (void *)getInputGenRT().Args.back());                   \
     return fromArgTy<TY>(getInputGenRT().Args.back());                         \
   }
 
@@ -402,7 +401,6 @@ int main(int argc, char **argv) {
   for (int I = Start; I < End; I++) {
     InputGenRTTy LocalInputGenRT(OutputDir, I);
     InputGenRT = &LocalInputGenRT;
-    printf(".");
     __inputgen_entry(argc, argv);
   }
 

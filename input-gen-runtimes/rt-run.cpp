@@ -19,7 +19,7 @@ int main(int argc, char **argv) {
   if (argc != 2)
     return 1;
   char *InputName = argv[1];
-  printf("IN %s\n", InputName);
+  printf("Replay %s\n", InputName);
 
   std::ifstream Input(InputName, std::ios::in | std::ios::binary);
 
