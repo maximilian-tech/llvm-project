@@ -130,7 +130,7 @@ struct InputGenRTTy {
   template <> void *getNewValue<void *>(int Max) {
     NumNewValues++;
     memset(Storage, 0, 64);
-    if (rand() % 1000) {
+    if (rand() % 10) {
       *reinterpret_cast<void **>(Storage) = getNewObj(1024 * 1024, true);
     }
     void *V = *((void **)(Storage));
@@ -180,7 +180,7 @@ struct InputGenRTTy {
   void report(FILE *ReportOut, std::ofstream &InputOut) {
     fprintf(ReportOut, "Args (%zu total)\n", Args.size());
     for (size_t I = 0; I < Args.size(); ++I)
-      fprintf(ReportOut, "Arg %zu: %lu\n", I, Args[I]);
+      fprintf(ReportOut, "Arg %zu: %p\n", I, (void *)Args[I]);
     fprintf(ReportOut, "\nNum new values: %lu\n", NumNewValues);
     fprintf(ReportOut, "\nHeap PtrMap: %lu\n", Heap->PtrMap.size());
     fprintf(ReportOut, "\nObjects (%zu total)\n", ObjMap.size());
@@ -213,6 +213,7 @@ struct InputGenRTTy {
     std::map<uint64_t, void *> Remap;
     std::map<void *, uint64_t> Repos;
     uintptr_t Idx = 0;
+    uint64_t TotalSize = 0;
     InputOut.seekp(sizeof(Idx));
     for (auto &It : ObjMap) {
       auto *ObjLIt = It.second->begin();
@@ -231,7 +232,8 @@ struct InputGenRTTy {
       //   continue;
       uint64_t Size =
           reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
-      writeSingleEl(InputOut, Size);
+      TotalSize += Size;
+      //      writeSingleEl(InputOut, Size);
       InputOut.write(reinterpret_cast<const char *>(ObjLIt), Size);
 
       Repos[It.second->begin()] = Idx;
@@ -247,8 +249,13 @@ struct InputGenRTTy {
     }
     auto AfterMemory = InputOut.tellp();
     InputOut.seekp(0);
-    writeSingleEl(InputOut, Idx);
+    writeSingleEl(InputOut, TotalSize);
     InputOut.seekp(AfterMemory);
+
+    uint64_t ArgsSize = Args.size() * sizeof(Args[0]);
+    writeSingleEl(InputOut, ArgsSize);
+    InputOut.write(ccast(Args.data()), ArgsSize);
+    auto AfterArgs = InputOut.tellp();
 
     uint64_t RemapNum = 0;
     // We will write the RemapNum here later
@@ -256,23 +263,28 @@ struct InputGenRTTy {
 
     for (auto &It : Remap) {
       if (Repos.count(It.second)) {
+        uint32_t MemRemap = 0;
+        writeSingleEl(InputOut, /* TODO enum */ MemRemap);
         writeSingleEl(InputOut, It.first);
         writeSingleEl(InputOut, Repos[It.second]);
         RemapNum++;
       }
-      auto Arg = std::find(Args.begin(), Args.end(), toArgTy(It.second));
-      if (Arg != Args.end()) {
-        *Arg = Repos[It.second];
-      }
     }
-    auto AfterRemap = InputOut.tellp();
-    InputOut.seekp(AfterMemory);
+    for (uint64_t ArgNo = 0; ArgNo < Args.size(); ++ArgNo) {
+      auto It = Repos.find((void *)Args[ArgNo]);
+      if (It == Repos.end())
+        continue;
+      uint32_t ArgRemap = 1;
+      writeSingleEl(InputOut, /* TODO enum */ ArgRemap);
+      writeSingleEl(InputOut, ArgNo);
+      writeSingleEl(InputOut, It->second);
+      //      *Arg = Repos[It.second];
+      RemapNum++;
+    }
+    // auto AfterRemap = InputOut.tellp();
+    InputOut.seekp(AfterArgs);
     writeSingleEl(InputOut, RemapNum);
-    InputOut.seekp(AfterRemap);
-
-    uint64_t ArgsSize = Args.size() * sizeof(Args[0]);
-    writeSingleEl(InputOut, ArgsSize);
-    InputOut.write(ccast(Args.data()), ArgsSize);
+    // InputOut.seekp(AfterRemap);
   }
 };
 

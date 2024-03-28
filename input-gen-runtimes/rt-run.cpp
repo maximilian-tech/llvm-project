@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cstdint>
 #include <fstream>
 #include <vector>
@@ -18,6 +19,7 @@ int main(int argc, char **argv) {
   if (argc != 2)
     return 1;
   char *InputName = argv[1];
+  printf("IN %s\n", InputName);
 
   std::ifstream Input(InputName, std::ios::in | std::ios::binary);
 
@@ -25,17 +27,26 @@ int main(int argc, char **argv) {
   char *Memory = ccast(malloc(MemSize));
   Input.read(ccast(Memory), MemSize);
 
-  auto RemapNum = readSingleEl<uint64_t>(Input);
-  for (uint64_t I = 0; I < RemapNum; I++) {
-    auto From = readSingleEl<uint64_t>(Input);
-    auto To = readSingleEl<uint64_t>(Input);
-
-    *((void **)&Memory[From]) = (void *)&Memory[To];
-  }
-
   auto ArgsMemSize = readSingleEl<uint64_t>(Input);
   char *ArgsMemory = ccast(malloc(ArgsMemSize));
   Input.read(ccast(ArgsMemory), ArgsMemSize);
+
+  auto RemapNum = readSingleEl<uint64_t>(Input);
+  for (uint64_t I = 0; I < RemapNum; I++) {
+    auto Kind = readSingleEl<uint32_t>(Input);
+    auto From = readSingleEl<uint64_t>(Input);
+    auto To = readSingleEl<uint64_t>(Input);
+    assert(To < MemSize);
+    if (Kind == 0) {
+      assert(From < MemSize);
+      *((void **)&Memory[From]) = (void *)&Memory[To];
+    } else if (Kind == 1) {
+      assert(From < ArgsMemSize / sizeof(uintptr_t));
+      *((void **)&ArgsMemory[From]) = (void *)&Memory[To];
+    } else {
+      exit(2);
+    }
+  }
 
   __inputrun_entry(ArgsMemory);
 
