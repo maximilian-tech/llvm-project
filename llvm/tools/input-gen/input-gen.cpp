@@ -116,7 +116,7 @@ public:
   std::string Clang;
   InputGenOrchestration(Module &M) : M(M){};
   void init(int Argc, char **Argv) {
-    if (CompileInputGenExecutable) {
+    if (CompileInputGenExecutables) {
       if (GenRuntime.empty() || RunRuntime.empty())
         fatalError("input-gen: Need to specify input-gen runtimes to compile "
                    "executables.");
@@ -165,10 +165,12 @@ public:
     for (auto &F : M.getFunctionList()) {
       if (F.isDeclaration())
         continue;
+
+      Fs << F.getName().str() << std::endl;
+
       auto HandleModule = [&](std::string ModuleName, std::string RuntimeName,
                               std::string ExecutableName,
                               IGInstrumentationModeTy Mode) {
-        Fs << F.getName().str() << std::endl;
 
         llvm::outs() << "Handling function @" << F.getName() << "\n";
         llvm::outs() << "Instrumenting...\n";

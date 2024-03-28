@@ -11,7 +11,12 @@ if __name__ == '__main__':
     parser.add_argument('--outdir', required=True)
     parser.add_argument('--inputmodule', required=True)
     parser.add_argument('--num', type=int, default=1)
-    parser.add_argument('--rt', default='../rt.cpp')
+    # TODO Pass in an object files here so as not to compile the cpp every time
+    parser.add_argument('--input-gen-runtime', default='./input-gen-runtimes/rt-input-gen.cpp')
+    parser.add_argument('--input-run-runtime', default='./input-gen-runtimes/rt-run.cpp')
+    """
+    --input-run-runtime ./runtime/rt-run.cpp --input-gen-runtime ./runtime/rt-input-gen.cpp
+    """
 
     args = parser.parse_args()
 
@@ -21,16 +26,19 @@ if __name__ == '__main__':
 
     subprocess.run([
         'input-gen',
-        '--input-gen-runtime', args.rt,
+        '--input-gen-runtime', args.input_gen_runtime,
+        '--input-run-runtime', args.input_run_runtime,
         '--output-dir', args.outdir,
         args.inputmodule,
-        '--compile-input-gen-executable',
+        '--compile-input-gen-executables',
     ], check=True)
 
     with open(os.path.join(args.outdir, 'available_functions')) as available_functions_file:
         for func in available_functions_file.read().splitlines():
             # TODO timeouts here?
-            inputgen_exe = os.path.join(args.outdir, 'input-gen.' + func + '.executable')
+            inputgen_exe = os.path.join(args.outdir, 'input-gen.' + func + '.generate.a.out')
+            if not os.path.isfile(inputgen_exe):
+                continue
             func_inputs_dir = os.path.join(args.outdir, 'input-gen.' + func + '.inputs')
             os.makedirs(func_inputs_dir, exist_ok=True)
             print('Generating inputs for function @{}'.format(func))
