@@ -68,11 +68,12 @@ static const std::string RecordingCallbackPrefix = "__record_";
 
 static std::string InputGenOutputFilename = "input_gen_%{fn}_%{uuid}.c";
 
-static cl::opt<IGInstrumentationModeTy> InstrumentationMode(
-    "input-gen-mode", cl::desc("Instrumentation mode"), cl::Hidden,
-    cl::init(IG_Generate),
-    cl::values(clEnumValN(IG_Record, "record", ""),
-               clEnumValN(IG_Generate, "generate", ""), clEnumValN(IG_Run, "run", "")));
+static cl::opt<IGInstrumentationModeTy>
+    InstrumentationMode("input-gen-mode", cl::desc("Instrumentation mode"),
+                        cl::Hidden, cl::init(IG_Generate),
+                        cl::values(clEnumValN(IG_Record, "record", ""),
+                                   clEnumValN(IG_Generate, "generate", ""),
+                                   clEnumValN(IG_Run, "run", "")));
 
 static cl::opt<bool> ClInsertVersionCheck(
     "input-gen-guard-against-version-mismatch",
@@ -187,7 +188,8 @@ private:
 
 class ModuleInputGenInstrumenter {
 public:
-  ModuleInputGenInstrumenter(Module &M, AnalysisManager<Module> &AM, IGInstrumentationModeTy Mode)
+  ModuleInputGenInstrumenter(Module &M, AnalysisManager<Module> &AM,
+                             IGInstrumentationModeTy Mode)
       : IGI(M, AM, Mode) {
     TargetTriple = Triple(M.getTargetTriple());
   }
@@ -418,7 +420,8 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
   return instrumentModuleForFunction(M, *EntryPoint);
 }
 
-bool ModuleInputGenInstrumenter::instrumentModuleForFunction(Module &M, Function &EntryPoint) {
+bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
+    Module &M, Function &EntryPoint) {
   if (EntryPoint.isDeclaration()) {
     errs() << "Entry point is declaration, used \"" << ClEntryPoint << "\".\n";
     return false;
@@ -611,8 +614,7 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F) {
                                   getCallbackPrefix(Mode) + "entry", M);
   auto *EntryBB = BasicBlock::Create(*Ctx, "entry", MainFn);
 
-  auto *RI =
-      ReturnInst::Create(*Ctx, EntryBB);
+  auto *RI = ReturnInst::Create(*Ctx, EntryBB);
   IRBuilder<> IRB(RI);
   IRB.SetCurrentDebugLocation(F.getEntryBlock().getTerminator()->getDebugLoc());
 

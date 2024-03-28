@@ -12,7 +12,7 @@ template <typename T> static T readSingleEl(std::ifstream &Input) {
   return El;
 }
 
-extern "C" void __inputrun_run(char *);
+extern "C" void __inputrun_entry(char *);
 
 int main(int argc, char **argv) {
   if (argc != 2)
@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
   char *ArgsMemory = ccast(malloc(ArgsMemSize));
   Input.read(ccast(ArgsMemory), ArgsMemSize);
 
-  __inputrun_run(ArgsMemory);
+  __inputrun_entry(ArgsMemory);
 
   free(ArgsMemory);
   free(Memory);

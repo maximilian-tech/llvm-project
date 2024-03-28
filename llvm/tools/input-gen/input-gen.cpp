@@ -49,8 +49,8 @@ static cl::opt<std::string> InputFilename(cl::Positional, cl::init("-"),
                                           cl::desc("Input file"),
                                           cl::cat(InputGenCategory));
 
-static cl::opt<bool> CompileInputGenExecutable("compile-input-gen-executable",
-                                               cl::cat(InputGenCategory));
+static cl::opt<bool> CompileInputGenExecutables("compile-input-gen-executables",
+                                                cl::cat(InputGenCategory));
 
 constexpr char ToolName[] = "input-gen";
 
@@ -165,8 +165,9 @@ public:
     for (auto &F : M.getFunctionList()) {
       if (F.isDeclaration())
         continue;
-      auto HandleModule = [&](std::string ModuleName, std::string RuntimeName, std::string ExecutableName, IGInstrumentationModeTy Mode) {
-
+      auto HandleModule = [&](std::string ModuleName, std::string RuntimeName,
+                              std::string ExecutableName,
+                              IGInstrumentationModeTy Mode) {
         Fs << F.getName().str() << std::endl;
 
         llvm::outs() << "Handling function @" << F.getName() << "\n";
@@ -187,8 +188,8 @@ public:
         }
 
         // TODO Use proper path concat function
-        if (CompileInputGenExecutable) {
-          if (!compileModule(ModuleName, RuntimeName, ExecutableName)) {
+        if (CompileInputGenExecutables) {
+          if (compileModule(ModuleName, RuntimeName, ExecutableName)) {
             llvm::outs() << "Compiling executable succeeded\n";
           } else {
             llvm::outs() << "Compiling executable failed\n";
@@ -239,7 +240,7 @@ public:
 
   bool compileModule(std::string ModuleName, std::string Runtime,
                      std::string ExecutableName) {
-    if (CompileInputGenExecutable) {
+    if (CompileInputGenExecutables) {
       outs() << "Compiling " << ExecutableName << "\n";
       SmallVector<StringRef, 8> Args = {
           Clang, "-fopenmp", "-O2", Runtime, ModuleName, "-o", ExecutableName};
