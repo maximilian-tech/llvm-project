@@ -134,8 +134,7 @@ public:
 
   void genForAllFunctions() {
     // TODO Use proper path concat function
-    std::string Functions =
-        OutputDir + "/" + "available_functions";
+    std::string Functions = OutputDir + "/" + "available_functions";
     auto Fs = std::ofstream(Functions);
 
     // TODO Maybe we can parallelize this loop
@@ -186,7 +185,7 @@ public:
     std::string InstrumentedModule =
         OutputDir + "/" + "input-gen." + Name + ".instrumented.bc";
     std::string InputGenExecutable =
-        OutputDir + "/" + "input-gen." + Name +  ".executable";
+        OutputDir + "/" + "input-gen." + Name + ".executable";
 
     int InstrumentedModuleFD;
     std::error_code EC =
@@ -207,13 +206,9 @@ public:
 
     if (CompileInputGenExecutable) {
       outs() << "Compiling " << InstrumentedModule << "\n";
-      SmallVector<StringRef, 8> Args = {Clang,
-                                        "-fopenmp",
-                                        "-O2",
-                                        InputGenRuntime,
-                                        InstrumentedModule,
-                                        "-o",
-                                        InputGenExecutable};
+      SmallVector<StringRef, 8> Args = {
+          Clang, "-fopenmp",        "-O2", InputGenRuntime, InstrumentedModule,
+          "-o",  InputGenExecutable};
       std::string ErrMsg;
       int Res = sys::ExecuteAndWait(
           Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
