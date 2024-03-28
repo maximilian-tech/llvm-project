@@ -24,16 +24,19 @@
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constant.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/ProfileData/InstrProf.h"
@@ -134,9 +137,9 @@ struct InterestingMemoryAccess {
 /// Instrument the code in module to profile memory accesses.
 class InputGenInstrumenter {
 public:
-  InputGenInstrumenter(Module &M, AnalysisManager<Module> &AM,
+  InputGenInstrumenter(Module &M, AnalysisManager<Module> &MAM,
                        IGInstrumentationModeTy Mode)
-      : Mode(Mode), AM(AM) {
+      : Mode(Mode), MAM(MAM) {
     Ctx = &(M.getContext());
     PtrTy = PointerType::getUnqual(*Ctx);
     Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
@@ -168,6 +171,8 @@ public:
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F);
   void createRunEntryPoint(Function &F);
+  void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
+  void provideGlobals(Module &M);
 
   IGInstrumentationModeTy Mode;
   Type *VoidTy, *FloatTy, *DoubleTy;
@@ -175,10 +180,10 @@ public:
   PointerType *PtrTy;
   LLVMContext *Ctx;
 
+  AnalysisManager<Module> &MAM;
+
 private:
   void initializeCallbacks(Module &M);
-
-  AnalysisManager<Module> &AM;
 
   // These arrays is indexed by AccessIsWrite
   DenseMap<std::pair<int, Type *>, FunctionCallee> InputGenMemoryAccessCallback;
@@ -218,8 +223,8 @@ bool inputGenerationInstrumentModuleForFunction(Function &F,
 } // namespace llvm
 
 PreservedAnalyses
-InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &AM) {
-  ModuleInputGenInstrumenter Profiler(M, AM, InstrumentationMode);
+InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &MAM) {
+  ModuleInputGenInstrumenter Profiler(M, MAM, InstrumentationMode);
   if (Profiler.instrumentModule(M))
     return PreservedAnalyses::none();
   return PreservedAnalyses::all();
@@ -427,6 +432,12 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
     return false;
   }
 
+  FunctionAnalysisManager &FAM =
+      IGI.MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  auto &TLI = FAM.getResult<TargetLibraryAnalysis>(EntryPoint);
+  IGI.stubDeclarations(M, TLI);
+  IGI.provideGlobals(M);
+
   switch (IGI.Mode) {
   case IG_Record:
     IGI.instrumentEntryPoint(EntryPoint);
@@ -495,6 +506,34 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       M.getOrInsertFunction(Prefix + "memset", PtrTy, PtrTy, Int32Ty, PtrTy);
 }
 
+void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
+  for (Function &F : M) {
+    if (!F.isDeclaration() || F.isIntrinsic())
+      continue;
+
+    LibFunc LF;
+    if (TLI.getLibFunc(F, LF) && TLI.has(LF))
+      continue;
+
+    F.setLinkage(GlobalValue::WeakAnyLinkage);
+    auto *EntryBB = BasicBlock::Create(*Ctx, "entry", &F);
+    if (F.getReturnType()->isVoidTy())
+      ReturnInst::Create(*Ctx, EntryBB);
+    else
+      ReturnInst::Create(*Ctx, Constant::getNullValue(F.getReturnType()),
+                         EntryBB);
+  }
+}
+
+void InputGenInstrumenter::provideGlobals(Module &M) {
+  for (GlobalVariable &GV : M.globals()) {
+    if (!GV.hasExternalLinkage())
+      continue;
+    GV.setLinkage(GlobalValue::CommonLinkage);
+    GV.setInitializer(Constant::getNullValue(GV.getValueType()));
+  }
+}
+
 void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
 
   initializeCallbacks(*F.getParent());
@@ -514,7 +553,7 @@ void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
   }
 
   FunctionAnalysisManager &FAM =
-      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+      MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   AnalysisGetter AG(FAM, /* CachedOnly */ false);
 
   CallGraphUpdater CGUpdater;
