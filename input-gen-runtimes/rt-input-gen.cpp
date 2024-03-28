@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -48,7 +49,7 @@ static constexpr uint64_t HeapSize = 1UL << 32;
 struct HeapTy : ObjectTy {
   HeapTy(HeapTy *LastHeap = nullptr)
       : ObjectTy(malloc(HeapSize), HeapSize), LastHeap(LastHeap) {
-    //    printf("New heap [%p:%p)\n", begin(), end());
+    printf("New heap [%p:%p)\n", begin(), end());
   }
   HeapTy *LastHeap = nullptr;
 
@@ -95,14 +96,16 @@ struct HeapTy : ObjectTy {
 };
 
 struct InputGenRTTy {
-  InputGenRTTy(const char *OutputDir, int Seed)
-      : Seed(Seed), OutputDir(OutputDir), Heap(new HeapTy()) {
+  InputGenRTTy(const char *ExecPath, const char *OutputDir, int Seed)
+      : Seed(Seed), OutputDir(OutputDir), ExecPath(ExecPath),
+        Heap(new HeapTy()) {
     Gen.seed(Seed);
   }
   ~InputGenRTTy() { report(); }
 
   int Seed;
   std::string OutputDir;
+  std::filesystem::path ExecPath;
   std::mt19937 Gen;
   std::uniform_int_distribution<> Rand;
   std::vector<char> Conds;
@@ -110,6 +113,7 @@ struct InputGenRTTy {
   int rand() { return Rand(Gen); }
 
   void *getNewObj(uint64_t Size, bool Artifical) {
+    printf("Get new obj %lu\n", Size);
     void *Loc;
     if (LastObj && advance(LastObj->end(), Size) < Heap->end()) {
       Loc = LastObj->end();
@@ -130,7 +134,7 @@ struct InputGenRTTy {
   template <> void *getNewValue<void *>(int Max) {
     NumNewValues++;
     memset(Storage, 0, 64);
-    if (rand() % 10) {
+    if (rand() % 1000) {
       *reinterpret_cast<void **>(Storage) = getNewObj(1024 * 1024, true);
     }
     void *V = *((void **)(Storage));
@@ -153,9 +157,10 @@ struct InputGenRTTy {
       std::ofstream Null("/dev/null");
       report(stdout, Null);
     } else {
-      std::string ReportOutName(OutputDir + "/" + "report." +
+      auto FileName = ExecPath.filename().string();
+      std::string ReportOutName(OutputDir + "/" + FileName + ".report." +
                                 std::to_string(Seed) + ".c");
-      std::string InputOutName(OutputDir + "/" + "code." +
+      std::string InputOutName(OutputDir + "/" + FileName + ".code." +
                                std::to_string(Seed) + ".c");
       std::ofstream InputOutStream(InputOutName,
                                    std::ios::out | std::ios::binary);
@@ -232,6 +237,7 @@ struct InputGenRTTy {
       //   continue;
       uint64_t Size =
           reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
+      printf("Size %lu\n", Size);
       TotalSize += Size;
       //      writeSingleEl(InputOut, Size);
       InputOut.write(reinterpret_cast<const char *>(ObjLIt), Size);
@@ -247,6 +253,7 @@ struct InputGenRTTy {
         ++Idx;
       }
     }
+    printf("TotalSize %lu\n", TotalSize);
     auto AfterMemory = InputOut.tellp();
     InputOut.seekp(0);
     writeSingleEl(InputOut, TotalSize);
@@ -361,6 +368,7 @@ RW(void *, ptr)
   TY __inputgen_arg_##NAME(TY Arg) {                                           \
     getInputGenRT().Args.push_back(                                            \
         toArgTy<TY>(getInputGenRT().getNewValue<TY>()));                       \
+    printf("arg %p\n", (void *)getInputGenRT().Args.back());                   \
     return fromArgTy<TY>(getInputGenRT().Args.back());                         \
   }
 
@@ -399,7 +407,7 @@ int main(int argc, char **argv) {
 
 #pragma omp parallel for schedule(dynamic, 5)
   for (int I = Start; I < End; I++) {
-    InputGenRTTy LocalInputGenRT(OutputDir, I);
+    InputGenRTTy LocalInputGenRT(argv[0], OutputDir, I);
     InputGenRT = &LocalInputGenRT;
     __inputgen_entry(argc, argv);
   }
