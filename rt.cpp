@@ -133,29 +133,31 @@ struct InputGenRTTy {
 
   void report() {
     if (OutputDir == "-") {
-      report(stdout, stderr);
+      // TODO cross platform
+      std::ofstream Null("/dev/null");
+      report(stdout, Null);
     } else {
-      std::string ReportOut(OutputDir + "/" + "report." + std::to_string(Seed) + ".c");
-      std::string CodeOut(OutputDir + "/" + "code." + std::to_string(Seed) + ".c");
-      FILE *ReportOutFD = fopen(ReportOut.c_str(), "w");
+      std::string ReportOutName(OutputDir + "/" + "report." +
+                                std::to_string(Seed) + ".c");
+      std::string InputOutName(OutputDir + "/" + "code." +
+                               std::to_string(Seed) + ".c");
+      std::ofstream InputOutStream(InputOutName,
+                                   std::ios::out | std::ios::binary);
+      FILE *ReportOutFD = fopen(ReportOutName.c_str(), "w");
       if (!ReportOutFD) {
-        fprintf(stderr, "Could not open %s\n", ReportOut.c_str());
+        fprintf(stderr, "Could not open %s\n", ReportOutName.c_str());
         return;
       }
-      FILE *CodeOutFD = fopen(CodeOut.c_str(), "w");;
-      if (!CodeOutFD) {
-        fprintf(stderr, "Could not open %s\n", CodeOut.c_str());
-        fclose(ReportOutFD);
-        return;
-      }
-      report(ReportOutFD, CodeOutFD);
+      report(ReportOutFD, InputOutStream);
       fclose(ReportOutFD);
-      fclose(CodeOutFD);
     }
   }
 
-  void report(FILE *ReportOut, FILE *CodeOut) {
+  template <typename T> const char *ccast(T *Ptr) {
+    return reinterpret_cast<const char *>(Ptr);
+  }
 
+  void report(FILE *ReportOut, std::ofstream &InputOut) {
     fprintf(ReportOut, "Args (%zu total)\n", Args.size());
     for (size_t I = 0; I < Args.size(); ++I)
       fprintf(ReportOut, "Arg %zu: %lu\n", I, Args[I]);
@@ -180,21 +182,19 @@ struct InputGenRTTy {
       if (ObjLIt == ObjRIt)
         continue;
       fprintf(ReportOut, "Obj [%p : %p] %lu)\n", ObjLIt, ObjRIt,
-             ((char *)ObjRIt - (char *)ObjLIt));
+              ((char *)ObjRIt - (char *)ObjLIt));
       Min = std::min(Min, uintptr_t(ObjLIt));
       Max = std::max(Max, uintptr_t(ObjRIt));
     }
-    fprintf(ReportOut, "Heap %p : Min %p :: Max %p\n", Heap->begin(), (void *)Min,
-           (void *)Max);
+    fprintf(ReportOut, "Heap %p : Min %p :: Max %p\n", Heap->begin(),
+            (void *)Min, (void *)Max);
     fprintf(ReportOut, "%lu\n", (char *)Min - (char *)Heap->begin());
 
-    fprintf(CodeOut, "#include <stdint.h>\n");
-    fprintf(CodeOut, "  char Memory[] = {");
-    //    fprintf(ReportOut, "  uintptr_t MemoryDiff = (uintptr_t)Memory -
-    //    (uintptr_t)%p;\n", Heap->begin());
     std::map<int, void *> Remap;
     std::map<void *, int> Repos;
     uintptr_t Idx = 0;
+    uint64_t ObjNum = ObjMap.size();
+    InputOut.write(reinterpret_cast<const char *>(&ObjNum), sizeof(ObjNum));
     for (auto &It : ObjMap) {
       auto *ObjLIt = It.second->begin();
       auto *ObjRIt = It.second->end();
@@ -208,8 +208,13 @@ struct InputGenRTTy {
           break;
         ObjRIt = advance(ObjRIt, -1);
       }
-      if (ObjLIt == ObjRIt)
-        continue;
+      // if (ObjLIt == ObjRIt)
+      //   continue;
+      uint64_t Size =
+          reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
+      InputOut.write(reinterpret_cast<const char *>(&Size), sizeof(Size));
+      InputOut.write(reinterpret_cast<const char *>(ObjLIt), Size);
+
       Repos[It.second->begin()] = Idx;
       auto PtrEnd = Heap->PtrMap.end();
       while (ObjRIt != ObjLIt) {
@@ -217,48 +222,19 @@ struct InputGenRTTy {
         if (PtrIt != PtrEnd) {
           Remap[Idx] = PtrIt->second;
         }
-        if (Idx)
-          fprintf(CodeOut, ",%i", (int)*(char *)ObjLIt);
-        else
-          fprintf(CodeOut, "%i", (int)*(char *)ObjLIt);
-        ObjLIt = advance(ObjLIt, sizeof(char));
+        ObjLIt = advance(ObjLIt, 1);
         ++Idx;
       }
     }
-    fprintf(CodeOut, "};\n\n");
-    fprintf(CodeOut, "char Conds[] = {");
-    Idx = 0;
-    char C = 0;
-    fprintf(ReportOut, "Conds: %zu\n", Conds.size());
-    while (Idx < Conds.size()) {
-      auto Rem = Idx % 8;
-      fprintf(ReportOut, " %i : %i : %i\n", C, Conds[Idx], Conds[Idx] << Rem);
-      C |= (Conds[Idx] << Rem);
-      fprintf(ReportOut, "=%i : %i : %i\n", C, Conds[Idx], Conds[Idx] << Rem);
-      Idx++;
-      if ((Idx % 8) == 0) {
-        if (Idx > 8)
-          fprintf(CodeOut, ",");
-        fprintf(CodeOut, "%i", (int)C);
-        C = 0;
+
+    for (auto &It : Remap) {
+      if (Repos.count(It.second)) {
+        InputOut.write("!", 1);
+        InputOut.write(ccast(&It.first), sizeof(It.first));
+        InputOut.write(ccast(&Repos[It.second]), sizeof(Repos[It.second]));
       }
     }
-    if ((Idx % 8) != 0) {
-      if (Idx > 8)
-        fprintf(CodeOut, ",");
-      fprintf(CodeOut, "%i", (int)C);
-    }
-    fprintf(CodeOut, "};\n\n");
-    fprintf(CodeOut, "struct LinkedList;\n\n");
-    fprintf(CodeOut, "extern \"C\" void foo(LinkedList*);\n\n");
-    fprintf(CodeOut, "int main() {\n");
-    for (auto &It : Remap) {
-      if (Repos.count(It.second))
-        fprintf(CodeOut, "  *((void**)&Memory[%i]) = (void*)&Memory[%i];\n",
-                It.first, Repos[It.second]);
-    }
-    fprintf(CodeOut, "  foo((LinkedList*)(Memory));\n");
-    fprintf(CodeOut, "}\n");
+    InputOut.write("\0", 1);
   }
 };
 
