@@ -16,6 +16,7 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/IPO/InputGeneration.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
@@ -34,13 +35,17 @@ cl::OptionCategory InputGenCategory("input-gen Options");
 static cl::opt<std::string> OutputDir("output-dir", cl::Required,
                                       cl::cat(InputGenCategory));
 
-static cl::opt<std::string> InputGenRuntime(
+static cl::opt<std::string> GenRuntime(
     "input-gen-runtime",
     cl::desc("Input gen runtime to link into the instrumented module."),
     cl::cat(InputGenCategory));
 
-static cl::opt<std::string> InputFilename(cl::Positional,
-                                          cl::init("-"),
+static cl::opt<std::string> RunRuntime(
+    "input-run-runtime",
+    cl::desc("Input gen runtime to link into the instrumented module."),
+    cl::cat(InputGenCategory));
+
+static cl::opt<std::string> InputFilename(cl::Positional, cl::init("-"),
                                           cl::desc("Input file"),
                                           cl::cat(InputGenCategory));
 
@@ -48,12 +53,6 @@ static cl::opt<bool> CompileInputGenExecutable("compile-input-gen-executable",
                                                cl::cat(InputGenCategory));
 
 constexpr char ToolName[] = "input-gen";
-
-namespace llvm {
-bool inputGenerationInstrumentModuleForFunction(Function &F,
-                                                ModuleAnalysisManager &MAM);
-
-} // namespace llvm
 
 [[noreturn]] static void fatalError(const Twine &Message) {
   errs() << Message << "\n";
@@ -118,9 +117,9 @@ public:
   InputGenOrchestration(Module &M) : M(M){};
   void init(int Argc, char **Argv) {
     if (CompileInputGenExecutable) {
-      if (InputGenRuntime.empty())
-        fatalError("input-gen: Need to specify input-gen runtime to compile "
-                   "executable.");
+      if (GenRuntime.empty() || RunRuntime.empty())
+        fatalError("input-gen: Need to specify input-gen runtimes to compile "
+                   "executables.");
 
       ErrorOr<std::string> ClangOrErr =
           findClang(Argv[0], "ignoring-this-for-now");
@@ -133,6 +132,30 @@ public:
     }
   }
 
+  std::unique_ptr<Module> getInstrumentedModule(Module &M, Function &F,
+                                                IGInstrumentationModeTy Mode) {
+    ValueToValueMapTy VMap;
+    auto ClonedModule = CloneModule(M, VMap);
+    auto &ClonedF = *cast<Function>(VMap[&F]);
+
+    LoopAnalysisManager LAM;
+    FunctionAnalysisManager FAM;
+    CGSCCAnalysisManager CGAM;
+    ModuleAnalysisManager MAM;
+
+    PassBuilder PB;
+
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+    inputGenerationInstrumentModuleForFunction(ClonedF, MAM, Mode);
+
+    return ClonedModule;
+  }
+
   void genForAllFunctions() {
     // TODO Use proper path concat function
     std::string Functions = OutputDir + "/" + "available_functions";
@@ -142,74 +165,84 @@ public:
     for (auto &F : M.getFunctionList()) {
       if (F.isDeclaration())
         continue;
+      auto HandleModule = [&](std::string ModuleName, std::string RuntimeName, std::string ExecutableName, IGInstrumentationModeTy Mode) {
 
-      Fs << F.getName().str() << std::endl;
+        Fs << F.getName().str() << std::endl;
 
-      ValueToValueMapTy VMap;
-      auto ClonedModule = CloneModule(M, VMap);
-      auto &ClonedF = *cast<Function>(VMap[&F]);
+        llvm::outs() << "Handling function @" << F.getName() << "\n";
+        llvm::outs() << "Instrumenting...\n";
 
-      LoopAnalysisManager LAM;
-      FunctionAnalysisManager FAM;
-      CGSCCAnalysisManager CGAM;
-      ModuleAnalysisManager MAM;
+        auto GenModule = getInstrumentedModule(M, F, Mode);
+        if (!GenModule) {
+          llvm::outs() << "Instrumenting failed\n";
+          return;
+        }
+        llvm::outs() << "Instrumenting succeeded\n";
 
-      PassBuilder PB;
+        llvm::outs() << "Generating input module...\n";
 
-      PB.registerModuleAnalyses(MAM);
-      PB.registerCGSCCAnalyses(CGAM);
-      PB.registerFunctionAnalyses(FAM);
-      PB.registerLoopAnalyses(LAM);
-      PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+        if (!writeModuleToFile(*GenModule, ModuleName)) {
+          llvm::outs() << "Writing module to file failed\n";
+          exit(1);
+        }
 
-      llvm::outs() << "Handling function @" << ClonedF.getName() << "\n";
-      llvm::outs() << "Instrumenting...\n";
-      if (!inputGenerationInstrumentModuleForFunction(ClonedF, MAM)) {
-        llvm::outs() << "Instrumenting failed\n";
-        continue;
-      }
-      llvm::outs() << "Instrumenting succeeded\n";
+        // TODO Use proper path concat function
+        if (CompileInputGenExecutable) {
+          if (!compileModule(ModuleName, RuntimeName, ExecutableName)) {
+            llvm::outs() << "Compiling executable succeeded\n";
+          } else {
+            llvm::outs() << "Compiling executable failed\n";
+            return;
+          }
+        }
+      };
 
-      llvm::outs() << "Generating input module...\n";
+      std::string Name = F.getName().str();
 
-      if (generateInputModule(*ClonedModule, ClonedF)) {
-        llvm::outs() << "Generating input module succeeded\n";
-      } else {
-        llvm::outs() << "Generating input module failed\n";
-      }
+      // TODO Use proper path concat function
+      std::string GenModuleName =
+          OutputDir + "/" + "input-gen." + Name + ".generate.bc";
+      std::string GenExecutableName =
+          OutputDir + "/" + "input-gen." + Name + ".generate.a.out";
+      std::string RunModuleName =
+          OutputDir + "/" + "input-gen." + Name + ".run.bc";
+      std::string RunExecutableName =
+          OutputDir + "/" + "input-gen." + Name + ".run.a.out";
+      HandleModule(GenModuleName, GenRuntime, GenExecutableName, IG_Generate);
+      HandleModule(RunModuleName, RunRuntime, RunExecutableName, IG_Run);
     }
   }
 
-  bool generateInputModule(Module &M, Function &F) {
-    std::string Name = F.getName().str();
-    // TODO Use proper path concat function
-    std::string InstrumentedModule =
-        OutputDir + "/" + "input-gen." + Name + ".instrumented.bc";
-    std::string InputGenExecutable =
-        OutputDir + "/" + "input-gen." + Name + ".executable";
-
-    int InstrumentedModuleFD;
-    std::error_code EC =
-        sys::fs::openFileForWrite(InstrumentedModule, InstrumentedModuleFD);
-    if (EC)
+  bool writeModuleToFile(Module &M, std::string FileName) {
+    int FD;
+    std::error_code EC = sys::fs::openFileForWrite(FileName, FD);
+    if (EC) {
       // errc::permission_denied happens on Windows when we try to open a file
       // that has been marked for deletion.
-      if (!(EC == std::errc::file_exists || EC == std::errc::permission_denied))
-        return false;
-
-    if (writeProgramToFile(InstrumentedModuleFD, M)) {
-      errs() << ToolName << ": Error emitting bitcode to file '"
-             << InstrumentedModule << "'!\n";
-      close(InstrumentedModuleFD);
+      // if (!(EC == std::errc::file_exists ||
+      //       EC == std::errc::permission_denied)) {
+      //   ?
+      // }
+      errs() << ToolName << ": Could not open '" << FileName << "'!\n";
       exit(1);
     }
-    close(InstrumentedModuleFD);
 
+    if (writeProgramToFile(FD, M)) {
+      errs() << ToolName << ": Error emitting bitcode to file '" << FileName
+             << "'!\n";
+      close(FD);
+      exit(1);
+    }
+    close(FD);
+    return true;
+  }
+
+  bool compileModule(std::string ModuleName, std::string Runtime,
+                     std::string ExecutableName) {
     if (CompileInputGenExecutable) {
-      outs() << "Compiling " << InstrumentedModule << "\n";
+      outs() << "Compiling " << ExecutableName << "\n";
       SmallVector<StringRef, 8> Args = {
-          Clang, "-fopenmp",        "-O2", InputGenRuntime, InstrumentedModule,
-          "-o",  InputGenExecutable};
+          Clang, "-fopenmp", "-O2", Runtime, ModuleName, "-o", ExecutableName};
       std::string ErrMsg;
       int Res = sys::ExecuteAndWait(
           Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},

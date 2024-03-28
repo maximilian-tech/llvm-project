@@ -28,6 +28,11 @@ public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 
+enum IGInstrumentationModeTy { IG_Record, IG_Generate, IG_Run };
+
+bool inputGenerationInstrumentModuleForFunction(Function &F,
+                                                ModuleAnalysisManager &MAM,
+                                                IGInstrumentationModeTy Mode);
 } // namespace llvm
 
 #endif

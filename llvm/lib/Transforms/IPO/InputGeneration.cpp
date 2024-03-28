@@ -63,14 +63,16 @@ constexpr char InitName[] = "init";
 constexpr char DeinitName[] = "deinit";
 constexpr char FilenameVar[] = "profile_filename";
 static const std::string InputGenCallbackPrefix = "__inputgen_";
+static const std::string InputRunCallbackPrefix = "__inputrun_";
 static const std::string RecordingCallbackPrefix = "__record_";
 
 static std::string InputGenOutputFilename = "input_gen_%{fn}_%{uuid}.c";
 
-static cl::opt<bool> IGRecording(
-    "input-gen-record",
-    cl::desc("Instrument for recording inputs, not generating them."),
-    cl::Hidden, cl::init(false));
+static cl::opt<IGInstrumentationModeTy> InstrumentationMode(
+    "input-gen-mode", cl::desc("Instrumentation mode"), cl::Hidden,
+    cl::init(IG_Generate),
+    cl::values(clEnumValN(IG_Record, "record", ""),
+               clEnumValN(IG_Generate, "generate", ""), clEnumValN(IG_Run, "run", "")));
 
 static cl::opt<bool> ClInsertVersionCheck(
     "input-gen-guard-against-version-mismatch",
@@ -131,7 +133,9 @@ struct InterestingMemoryAccess {
 /// Instrument the code in module to profile memory accesses.
 class InputGenInstrumenter {
 public:
-  InputGenInstrumenter(Module &M, AnalysisManager<Module> &AM) : AM(AM) {
+  InputGenInstrumenter(Module &M, AnalysisManager<Module> &AM,
+                       IGInstrumentationModeTy Mode)
+      : Mode(Mode), AM(AM) {
     Ctx = &(M.getContext());
     PtrTy = PointerType::getUnqual(*Ctx);
     Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
@@ -162,7 +166,9 @@ public:
   void instrumentEntryPoint(Function &F);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F);
+  void createRunEntryPoint(Function &F);
 
+  IGInstrumentationModeTy Mode;
   Type *VoidTy, *FloatTy, *DoubleTy;
   IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
   PointerType *PtrTy;
@@ -181,8 +187,8 @@ private:
 
 class ModuleInputGenInstrumenter {
 public:
-  ModuleInputGenInstrumenter(Module &M, AnalysisManager<Module> &AM)
-      : IGI(M, AM) {
+  ModuleInputGenInstrumenter(Module &M, AnalysisManager<Module> &AM, IGInstrumentationModeTy Mode)
+      : IGI(M, AM, Mode) {
     TargetTriple = Triple(M.getTargetTriple());
   }
 
@@ -201,16 +207,17 @@ InputGenerationInstrumentPass::InputGenerationInstrumentPass() = default;
 
 namespace llvm {
 bool inputGenerationInstrumentModuleForFunction(Function &F,
-                                                ModuleAnalysisManager &MAM) {
+                                                ModuleAnalysisManager &MAM,
+                                                IGInstrumentationModeTy Mode) {
   Module &M = *F.getParent();
-  ModuleInputGenInstrumenter Profiler(M, MAM);
+  ModuleInputGenInstrumenter Profiler(M, MAM, Mode);
   return Profiler.instrumentModuleForFunction(M, F);
 }
 } // namespace llvm
 
 PreservedAnalyses
 InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &AM) {
-  ModuleInputGenInstrumenter Profiler(M, AM);
+  ModuleInputGenInstrumenter Profiler(M, AM, InstrumentationMode);
   if (Profiler.instrumentModule(M))
     return PreservedAnalyses::none();
   return PreservedAnalyses::all();
@@ -363,13 +370,26 @@ void InputGenInstrumenter::instrumentAddress(
   IRB.CreateCall(Fn, Args);
 }
 
+static std::string getCallbackPrefix(IGInstrumentationModeTy Mode) {
+  switch (Mode) {
+  case IG_Run:
+    return InputRunCallbackPrefix;
+  case IG_Record:
+    return RecordingCallbackPrefix;
+  case IG_Generate:
+    return InputGenCallbackPrefix;
+  }
+  llvm_unreachable("Invalid mode");
+}
+
 // Create the variable for the profile file name.
-void createProfileFileNameVar(Module &M, Triple &TT) {
+void createProfileFileNameVar(Module &M, Triple &TT,
+                              IGInstrumentationModeTy Mode) {
   assert(!InputGenOutputFilename.empty() &&
          "Unexpected empty string for output filename");
   Constant *ProfileNameConst = ConstantDataArray::getString(
       M.getContext(), InputGenOutputFilename.c_str(), true);
-  auto Prefix = IGRecording ? RecordingCallbackPrefix : InputGenCallbackPrefix;
+  auto Prefix = getCallbackPrefix(Mode);
   GlobalVariable *ProfileNameVar = new GlobalVariable(
       M, ProfileNameConst->getType(), /*isConstant=*/true,
       GlobalValue::WeakAnyLinkage, ProfileNameConst, Prefix + FilenameVar);
@@ -404,13 +424,21 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(Module &M, Function
     return false;
   }
 
-  IGI.instrumentEntryPoint(EntryPoint);
-  if (IGRecording)
+  switch (IGI.Mode) {
+  case IG_Record:
+    IGI.instrumentEntryPoint(EntryPoint);
     IGI.createRecordingEntryPoint(EntryPoint);
-  else
+    break;
+  case IG_Generate:
+    IGI.instrumentEntryPoint(EntryPoint);
     IGI.createGenerationEntryPoint(EntryPoint);
+    break;
+  case IG_Run:
+    IGI.createRunEntryPoint(EntryPoint);
+    return true;
+  }
 
-  auto Prefix = IGRecording ? RecordingCallbackPrefix : InputGenCallbackPrefix;
+  auto Prefix = getCallbackPrefix(IGI.Mode);
 
   // Create a module constructor.
   std::string InputGenVersion = std::to_string(LLVM_INPUT_GEN_VERSION);
@@ -436,7 +464,7 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(Module &M, Function
 
   appendToGlobalDtors(M, DeinitFn, /*Priority=*/1000);
 
-  createProfileFileNameVar(M, TargetTriple);
+  createProfileFileNameVar(M, TargetTriple, IGI.Mode);
 
   return true;
 }
@@ -445,7 +473,7 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
 
   Type *Types[] = {Int1Ty,  Int8Ty, Int16Ty, Int32Ty,
                    Int64Ty, PtrTy,  FloatTy, DoubleTy};
-  auto Prefix = IGRecording ? RecordingCallbackPrefix : InputGenCallbackPrefix;
+  auto Prefix = getCallbackPrefix(Mode);
   for (Type *Ty : Types) {
     for (int I = 0; I < InterestingMemoryAccess::Last; ++I) {
       InterestingMemoryAccess::KindTy K = InterestingMemoryAccess::KindTy(I);
@@ -475,7 +503,7 @@ void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
     if (&Fn == &F || Fn.isDeclaration())
       continue;
 
-    if (!IGRecording) {
+    if (Mode != IG_Record) {
       Fn.setVisibility(GlobalValue::DefaultVisibility);
       Fn.setLinkage(GlobalValue::InternalLinkage);
     }
@@ -554,8 +582,8 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F) {
     OldMain->setName("__user_main");
 
   FunctionType *MainTy = FunctionType::get(Int32Ty, {Int32Ty, PtrTy}, false);
-  auto *MainFn =
-      Function::Create(MainTy, GlobalValue::ExternalLinkage, "__inputgen_entry", M);
+  auto *MainFn = Function::Create(MainTy, GlobalValue::ExternalLinkage,
+                                  getCallbackPrefix(Mode) + "entry", M);
   auto *EntryBB = BasicBlock::Create(*Ctx, "entry", MainFn);
 
   auto *RI =
@@ -569,6 +597,32 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F) {
         InputGenCallbackPrefix + "arg_" + getTypeName(Arg.getType()),
         FunctionType::get(Arg.getType(), false));
     Args.push_back(IRB.CreateCall(ArgPtrFn, {}));
+  }
+  IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
+}
+
+void InputGenInstrumenter::createRunEntryPoint(Function &F) {
+  Module &M = *F.getParent();
+  if (auto *OldMain = M.getFunction("main"))
+    OldMain->setName("__user_main");
+
+  FunctionType *MainTy = FunctionType::get(VoidTy, {PtrTy}, false);
+  auto *MainFn = Function::Create(MainTy, GlobalValue::ExternalLinkage,
+                                  getCallbackPrefix(Mode) + "entry", M);
+  auto *EntryBB = BasicBlock::Create(*Ctx, "entry", MainFn);
+
+  auto *RI =
+      ReturnInst::Create(*Ctx, EntryBB);
+  IRBuilder<> IRB(RI);
+  IRB.SetCurrentDebugLocation(F.getEntryBlock().getTerminator()->getDebugLoc());
+
+  Argument *ArgsPtr = MainFn->getArg(0);
+  unsigned Idx = 0;
+  SmallVector<Value *> Args;
+  for (auto &Arg : F.args()) {
+    Value *ArgPtr = IRB.CreateGEP(Int64Ty, ArgsPtr, {IRB.getInt64(Idx)});
+    Value *Load = IRB.CreateLoad(Arg.getType(), ArgPtr);
+    Args.push_back(Load);
   }
   IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
 }
