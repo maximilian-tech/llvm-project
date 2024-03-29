@@ -382,7 +382,7 @@ ARG(double, double)
 ARG(void *, ptr)
 #undef ARG
 
-void __inputgen_entry(int, char **);
+int __inputgen_entry(int, char **);
 }
 
 int main(int argc, char **argv) {
