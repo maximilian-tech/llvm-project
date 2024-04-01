@@ -5,6 +5,7 @@ import argparse
 import os
 import sys
 import time
+import json
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('InputGenModule')
@@ -99,7 +100,8 @@ class InputGenModule:
         except Exception:
             print('Failed to instrument')
 
-        with open(os.path.join(self.outdir, 'available_functions')) as available_functions_file:
+        available_functions_file_name = os.path.join(self.outdir, 'available_functions')
+        with open(available_functions_file_name, 'r') as available_functions_file:
             self.functions = []
 
             for fname in available_functions_file.read().splitlines():
@@ -135,11 +137,16 @@ class InputGenModule:
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
 
-                    # TODO we could accidentally kill the input gen while it writes
-                    # the results to the file, find a better way to orchestrate this
+                    # TODO we could accidentally kill the input gen while it
+                    # writes the results to the file, find a better way to
+                    # orchestrate this.
                     #
-                    # Perhaps input-gen into a tmp dir and move everything into the
-                    # correct dir only if we succeeded
+                    # TODO also with the current implementation one of the input
+                    # gens timing out would mean we lose even the completed
+                    # ones.
+                    #
+                    # Perhaps multi-process input-gen into a tmp dir and move
+                    # completed inputs into the correct dir only if we succeeded
                     out, err = proc.communicate(timeout=self.input_gen_timeout)
 
                     if proc.returncode != 0:
@@ -167,6 +174,10 @@ class InputGenModule:
                         proc.kill()
                         proc.communicate()
                         print("Killed.")
+
+        available_functions_pickle_file_name = os.path.join(self.outdir, 'available_functions.json')
+        with open(available_functions_pickle_file_name, 'w') as available_functions_pickle_file:
+            available_functions_pickle_file.write(json.dumps(self.functions, default=vars))
 
     def run_all_inputs(self):
         for func in self.functions:
