@@ -56,9 +56,12 @@ class Function:
             end_time = time.time()
             elapsed_time = end_time - start_time
 
-            if input not in self.times:
-                self.times[input] = []
-            self.times[input].append(elapsed_time)
+            if proc.returncode != 0:
+                print('Input run process failed')
+            else:
+                if input not in self.times:
+                    self.times[input] = []
+                self.times[input].append(elapsed_time)
 
         except subprocess.CalledProcessError as e:
             print('Input run process failed')

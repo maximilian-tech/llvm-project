@@ -9,17 +9,46 @@ from datasets import load_dataset
 
 import input_gen_module
 
+def precompile_runtimes(args):
+    print('Precompiling runtimes... ', end='', flush=True)
+    args.input_gen_runtime = precompile_runtime(args.input_gen_runtime)
+    args.input_run_runtime = precompile_runtime(args.input_run_runtime)
+    print('Done.')
+
+def precompile_runtime(fname):
+    if (fname.endswith('.c') or
+        fname.endswith('.cpp') or
+        fname.endswith('.cxx')):
+
+        obj = fname + '.o'
+        subprocess.run(
+            'clang++ -std=c++17 -c -O3 -g'.split(' ') +
+            [fname, '-o', obj],
+            check=True)
+        return obj
+    else:
+        return fname
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('MassInputGen')
 
     parser.add_argument('--dataset', default='llvm-ml/ComPile')
     parser.add_argument('--outdir', required=True)
+
     parser.add_argument('--start', type=int, default=0)
     parser.add_argument('--end', type=int, default=10)
+
+    parser.add_argument('--precompile-rts', action='store_true')
+    parser.add_argument('--no-precompile-rts',
+                        dest='precompile_rts', action='store_false')
+    parser.set_defaults(precompile_rts=True)
 
     input_gen_module.add_option_args(parser)
 
     args = parser.parse_args()
+
+    if args.precompile_rts:
+        precompile_runtimes(args)
 
     ds = load_dataset(args.dataset, split='train', streaming=True)
 
