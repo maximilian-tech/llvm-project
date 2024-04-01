@@ -159,9 +159,9 @@ struct InputGenRTTy {
     } else {
       auto FileName = ExecPath.filename().string();
       std::string ReportOutName(OutputDir + "/" + FileName + ".report." +
-                                std::to_string(Seed) + ".c");
-      std::string InputOutName(OutputDir + "/" + FileName + ".code." +
-                               std::to_string(Seed) + ".c");
+                                std::to_string(Seed) + ".txt");
+      std::string InputOutName(OutputDir + "/" + FileName + ".input." +
+                               std::to_string(Seed) + ".bin");
       std::ofstream InputOutStream(InputOutName,
                                    std::ios::out | std::ios::binary);
       FILE *ReportOutFD = fopen(ReportOutName.c_str(), "w");
