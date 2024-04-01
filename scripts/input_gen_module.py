@@ -99,8 +99,6 @@ class InputGenModule:
         with open(os.path.join(self.outdir, 'available_functions')) as available_functions_file:
             self.functions = []
 
-            self.inputs = {}
-
             for fname in available_functions_file.read().splitlines():
                 func = Function(fname)
                 self.functions.append(func)
