@@ -42,14 +42,19 @@ int main(int argc, char **argv) {
     assert(To <= MemSize);
     if (Kind == 0) {
       assert(From < MemSize);
-      *((void **)&Memory[From]) = (void *)&Memory[To];
+      *(&((void **)Memory)[From]) = (void *)&Memory[To];
     } else if (Kind == 1) {
       assert(From < ArgsMemSize / sizeof(uintptr_t));
-      *((void **)&ArgsMemory[From]) = (void *)&Memory[To];
+      *(&((void **)ArgsMemory)[From]) = (void *)&Memory[To];
     } else {
       exit(2);
     }
   }
+
+  for (unsigned long I = 0; I < ArgsMemSize; I += sizeof(void *))
+    printf("[%lu] %i : %f : %li : %lf : %p\n", I, *((int *)&ArgsMemory[I]),
+           *((float *)&ArgsMemory[I]), *((long int *)&ArgsMemory[I]),
+           *((double *)&ArgsMemory[I]), *((void **)&ArgsMemory[I]));
 
   printf("Run\n");
   __inputrun_entry(ArgsMemory);

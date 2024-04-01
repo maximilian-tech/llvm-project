@@ -7,18 +7,6 @@ import sys
 import time
 import json
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('InputGenModule')
-
-    parser.add_argument('--outdir', required=True)
-    parser.add_argument('--input-module', required=True)
-
-    add_option_args(parser)
-
-    args = parser.parse_args()
-
-    input_gen_module(**vars(args))
-
 def add_option_args(parser):
     parser.add_argument('--input-gen-num', type=int, default=1)
     parser.add_argument('--input-gen-timeout', type=int, default=5)
@@ -58,21 +46,21 @@ class Function:
             elapsed_time = end_time - start_time
 
             if proc.returncode != 0:
-                print('Input run process failed')
+                print('Input run process failed (%i): %s' % (proc.returncode, input))
             else:
                 if input not in self.times:
                     self.times[input] = []
                 self.times[input].append(elapsed_time)
 
         except subprocess.CalledProcessError as e:
-            print('Input run process failed')
+            print('Input run process failed: %s' % input)
         except subprocess.TimeoutExpired as e:
-            print("Input run timed out! Terminating...")
+            print("Input run timed out! Terminating... %s" % input)
             proc.terminate()
             try:
                 proc.communicate(timeout=1)
             except subprocess.TimeoutExpired as e:
-                print("Termination timed out! Killing...")
+                print("Termination timed out! Killing... %s" % input)
                 proc.kill()
                 proc.communicate()
                 print("Killed.")
@@ -206,3 +194,19 @@ class InputGenModule:
                 stats['num_input_generated_funcs'] += 1
             if len(func.times) != 0:
                 stats['num_input_ran_funcs'] += 1
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('InputGenModule')
+
+    parser.add_argument('--outdir', required=True)
+    parser.add_argument('--input-module', required=True)
+
+    add_option_args(parser)
+
+    args = parser.parse_args()
+
+    IGM = InputGenModule(**vars(args))
+    IGM.generate_inputs()
+    IGM.run_all_inputs()
+    print(IGM.get_statistics())

@@ -232,19 +232,14 @@ InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &MAM) {
 
 // Instrument memset/memmove/memcpy
 void InputGenInstrumenter::instrumentMemIntrinsic(MemIntrinsic *MI) {
-  return;
   IRBuilder<> IRB(MI);
   IRB.SetCurrentDebugLocation(MI->getDebugLoc());
   if (isa<MemTransferInst>(MI)) {
     IRB.CreateCall(isa<MemMoveInst>(MI) ? InputGenMemmove : InputGenMemcpy,
-                   {MI->getOperand(0), MI->getOperand(1),
-                    IRB.CreateIntCast(MI->getOperand(2), PtrTy, false)});
+                   {MI->getOperand(0), MI->getOperand(1), MI->getOperand(2)});
   } else if (isa<MemSetInst>(MI)) {
-    IRB.CreateCall(
-        InputGenMemset,
-        {MI->getOperand(0),
-         IRB.CreateIntCast(MI->getOperand(1), IRB.getInt32Ty(), false),
-         IRB.CreateIntCast(MI->getOperand(2), PtrTy, false)});
+    IRB.CreateCall(InputGenMemset,
+                   {MI->getOperand(0), MI->getOperand(1), MI->getOperand(2)});
   }
   MI->eraseFromParent();
 }
@@ -499,11 +494,11 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
   }
 
   InputGenMemmove =
-      M.getOrInsertFunction(Prefix + "memmove", PtrTy, PtrTy, PtrTy, PtrTy);
+      M.getOrInsertFunction(Prefix + "memmove", PtrTy, PtrTy, PtrTy, Int64Ty);
   InputGenMemcpy =
-      M.getOrInsertFunction(Prefix + "memcpy", PtrTy, PtrTy, PtrTy, PtrTy);
+      M.getOrInsertFunction(Prefix + "memcpy", PtrTy, PtrTy, PtrTy, Int64Ty);
   InputGenMemset =
-      M.getOrInsertFunction(Prefix + "memset", PtrTy, PtrTy, Int32Ty, PtrTy);
+      M.getOrInsertFunction(Prefix + "memset", PtrTy, PtrTy, Int8Ty, Int64Ty);
 }
 
 void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
@@ -661,7 +656,7 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F) {
   unsigned Idx = 0;
   SmallVector<Value *> Args;
   for (auto &Arg : F.args()) {
-    Value *ArgPtr = IRB.CreateGEP(Int64Ty, ArgsPtr, {IRB.getInt64(Idx)});
+    Value *ArgPtr = IRB.CreateGEP(PtrTy, ArgsPtr, {IRB.getInt64(Idx++)});
     Value *Load = IRB.CreateLoad(Arg.getType(), ArgPtr);
     Args.push_back(Load);
   }

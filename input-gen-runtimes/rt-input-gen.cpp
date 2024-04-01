@@ -74,7 +74,7 @@ struct HeapTy : ObjectTy {
     } while (Size > 0);
   }
 
-  template <typename T> T read(void *Ptr, void *Base);
+  template <typename T> T read(void *Ptr, void *Base, uint32_t Size);
 
   template <typename T>
   void write(T *Ptr, T Val, uint32_t Size, bool DueToRead = false) {
@@ -300,19 +300,19 @@ static InputGenRTTy *InputGenRT;
 
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
-template <typename T> T HeapTy::read(void *Ptr, void *Base) {
-  if (begin() > Ptr || advance(Ptr, sizeof(T)) >= end()) {
+template <typename T> T HeapTy::read(void *Ptr, void *Base, uint32_t Size) {
+  if (begin() > Ptr || advance(Ptr, Size) >= end()) {
     if (LastHeap)
-      return LastHeap->read<T>(Ptr, Base);
+      return LastHeap->read<T>(Ptr, Base, Size);
     //    printf("Out of bound read at %p < %p:%p < %p\n", begin(), Ptr,
     //           advance(Ptr, sizeof(T)), end());
     return *reinterpret_cast<T *>(Ptr);
   }
-  if (!isUsed(Ptr, sizeof(T))) {
-    write((T *)Ptr, getInputGenRT().getNewValue<T>(), sizeof(T), true);
-    assert(isUsed(Ptr, sizeof(T)));
+  if (!isUsed(Ptr, Size)) {
+    write((T *)Ptr, getInputGenRT().getNewValue<T>(), Size, true);
+    assert(isUsed(Ptr, Size));
   }
-  assert(begin() <= Ptr && advance(Ptr, sizeof(T)) < end());
+  assert(begin() <= Ptr && advance(Ptr, Size) < end());
   return *reinterpret_cast<T *>(Ptr);
 }
 
@@ -326,14 +326,32 @@ void __inputgen_deinit() {
   // getInputGenRT().init();
 }
 
+void *__inputgen_memmove(void *Tgt, void *Src, uint64_t N) {
+  char *SrcIt = (char *)Src;
+  char *TgtIt = (char *)Tgt;
+  for (uintptr_t I = 0; I < N; ++I, ++SrcIt, ++TgtIt) {
+    auto V = getInputGenRT().Heap->read<char>(SrcIt, Src, sizeof(char));
+    getInputGenRT().Heap->write<char>(TgtIt, V, sizeof(char));
+  }
+  return TgtIt;
+}
+
+void *__inputgen_memcpy(void *Tgt, void *Src, uint64_t N) {
+  return __inputgen_memmove(Tgt, Src, N);
+}
+
+void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
+  char *TgtIt = (char *)Tgt;
+  for (uintptr_t I = 0; I < N; ++I, ++TgtIt) {
+    getInputGenRT().Heap->write<char>(TgtIt, C, sizeof(char));
+  }
+  return TgtIt;
+}
+
 #define RW(TY, NAME)                                                           \
   void __inputgen_read_##NAME(void *Ptr, int64_t Val, int32_t Size,            \
                               void *Base) {                                    \
-    if (Size == sizeof(void *)) {                                              \
-      void *V = getInputGenRT().Heap->read<void *>(Ptr, Base);                 \
-    } else {                                                                   \
-      int32_t V = getInputGenRT().Heap->read<int32_t>(Ptr, Base);              \
-    }                                                                          \
+    getInputGenRT().Heap->read<TY>(Ptr, Base, Size);                           \
   }                                                                            \
   void __inputgen_write_##NAME(void *Ptr, int64_t Val, int32_t Size,           \
                                void *Base) {                                   \
@@ -341,13 +359,7 @@ void __inputgen_deinit() {
   }                                                                            \
   void __record_read_##NAME(void *Ptr, int64_t Val, int32_t Size,              \
                             void *Base) {                                      \
-    if (Size == sizeof(void *)) {                                              \
-      void *V = getInputGenRT().Heap->read<void *>(Ptr, Base);                 \
-      printf("Read %p[:%i] (%p): %p\n", Ptr, Size, Base, V);                   \
-    } else {                                                                   \
-      int32_t V = getInputGenRT().Heap->read<int32_t>(Ptr, Base);              \
-      printf("Read %p[:%i] (%p): %i\n", Ptr, Size, Base, V);                   \
-    }                                                                          \
+    getInputGenRT().Heap->read<TY>(Ptr, Base, Size);                           \
   }                                                                            \
   void __record_write_##NAME(void *Ptr, int64_t Val, int32_t Size,             \
                              void *Base) {                                     \
