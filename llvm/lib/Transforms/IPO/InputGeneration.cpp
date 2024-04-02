@@ -558,8 +558,9 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
       Instruction *UserI = cast<Instruction>(U.getUser());
       Value *&ReplVal = FnMap[UserI->getFunction()];
       if (!ReplVal)
-        ReplVal =
-            new LoadInst(GV.getType(), &GVPtr, GV.getName() + ".reload", UserI);
+        ReplVal = new LoadInst(
+            GV.getType(), &GVPtr, GV.getName() + ".reload",
+            UserI->getFunction()->getEntryBlock().getFirstInsertionPt());
       U.set(ReplVal);
     }
   }
