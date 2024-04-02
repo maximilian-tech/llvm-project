@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <vector>
 
@@ -13,7 +14,18 @@ template <typename T> static T readSingleEl(std::ifstream &Input) {
   return El;
 }
 
-extern "C" void __inputrun_entry(char *);
+static std::vector<char *> Globals;
+static size_t GlobalsIt = 0;
+
+extern "C" {
+void __inputgen_global(int32_t NumGlobals, void *Global, void **ReplGlobal,
+                       int32_t GlobalSize) {
+  assert(Globals.size() > GlobalsIt);
+  memcpy(Global, Globals[GlobalsIt], GlobalSize);
+}
+
+void __inputrun_entry(char *);
+}
 
 int main(int argc, char **argv) {
   if (argc != 2)
@@ -41,11 +53,19 @@ int main(int argc, char **argv) {
     printf("%lu) %i: %lu -> %lu\n", I, Kind, From, To);
     assert(To <= MemSize);
     if (Kind == 0) {
+      // Heap
       assert(From < MemSize);
       *(&((void **)Memory)[From]) = (void *)&Memory[To];
     } else if (Kind == 1) {
+      // Arguments
       assert(From < ArgsMemSize / sizeof(uintptr_t));
       *(&((void **)ArgsMemory)[From]) = (void *)&Memory[To];
+    } else if (Kind == 2) {
+      // Globals
+      Globals.resize(std::max(Globals.size(), From + 1));
+      assert(!Globals[From]);
+      Globals[From] = &Memory[To];
+      printf("Global stored\n");
     } else {
       exit(2);
     }

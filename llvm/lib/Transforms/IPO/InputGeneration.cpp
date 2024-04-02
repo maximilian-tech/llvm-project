@@ -21,6 +21,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/iterator.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constant.h"
@@ -52,6 +53,7 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include <cstdint>
 
 using namespace llvm;
 
@@ -170,9 +172,13 @@ public:
   void instrumentEntryPoint(Function &F);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F);
+  void createGlobalCalls(Module &M, IRBuilder<> &IRB);
   void createRunEntryPoint(Function &F);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
   void provideGlobals(Module &M);
+
+  SmallVector<std::pair<GlobalVariable *, GlobalVariable *>>
+      MaybeExtInitializedGlobals;
 
   IGInstrumentationModeTy Mode;
   Type *VoidTy, *FloatTy, *DoubleTy;
@@ -522,10 +528,40 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
 
 void InputGenInstrumenter::provideGlobals(Module &M) {
   for (GlobalVariable &GV : M.globals()) {
+    if (GV.hasExternalLinkage() || !GV.isConstant())
+      MaybeExtInitializedGlobals.push_back({&GV, nullptr});
     if (!GV.hasExternalLinkage())
       continue;
+    GV.setConstant(false);
     GV.setLinkage(GlobalValue::CommonLinkage);
     GV.setInitializer(Constant::getNullValue(GV.getValueType()));
+  }
+
+  if (Mode != IG_Generate)
+    return;
+
+  // Code that introduces an indirection for globals.
+  SmallVector<Use *> InstUses;
+  for (auto &It : MaybeExtInitializedGlobals) {
+    auto &GV = *It.first;
+    auto &GVPtr = *new GlobalVariable(
+        GV.getType(), false, GlobalValue::PrivateLinkage,
+        Constant::getNullValue(GV.getType()), GV.getName() + ".ptr");
+    It.second = &GVPtr;
+    M.insertGlobalVariable(&GVPtr);
+    InstUses.clear();
+    for (auto &U : GV.uses())
+      if (isa<Instruction>(U.getUser()))
+        InstUses.push_back(&U);
+    DenseMap<Function *, Value *> FnMap;
+    for (auto &U : make_pointee_range(InstUses)) {
+      Instruction *UserI = cast<Instruction>(U.getUser());
+      Value *&ReplVal = FnMap[UserI->getFunction()];
+      if (!ReplVal)
+        ReplVal =
+            new LoadInst(GV.getType(), &GVPtr, GV.getName() + ".reload", UserI);
+      U.set(ReplVal);
+    }
   }
 }
 
@@ -613,6 +649,23 @@ void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
   }
 }
 
+void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
+  auto DL = M.getDataLayout();
+  FunctionCallee GVFn = M.getOrInsertFunction(
+      InputGenCallbackPrefix + "global",
+      FunctionType::get(VoidTy, {Int32Ty, PtrTy, PtrTy, Int32Ty}, false));
+
+  auto NumGlobalsVal =
+      ConstantInt::get(Int32Ty, MaybeExtInitializedGlobals.size());
+  for (auto &It : MaybeExtInitializedGlobals) {
+    auto *GV = It.first;
+    auto *GVPtr = It.second ? It.second : Constant::getNullValue(PtrTy);
+    auto GVSize = DL.getTypeAllocSize(GV->getValueType());
+    IRB.CreateCall(
+        GVFn, {NumGlobalsVal, GV, GVPtr, ConstantInt::get(Int32Ty, GVSize)});
+  }
+}
+
 void InputGenInstrumenter::createGenerationEntryPoint(Function &F) {
   Module &M = *F.getParent();
   if (auto *OldMain = M.getFunction("main"))
@@ -627,6 +680,8 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F) {
       ReturnInst::Create(*Ctx, ConstantInt::getNullValue(Int32Ty), EntryBB);
   IRBuilder<> IRB(RI);
   IRB.SetCurrentDebugLocation(F.getEntryBlock().getTerminator()->getDebugLoc());
+
+  createGlobalCalls(M, IRB);
 
   SmallVector<Value *> Args;
   for (auto &Arg : F.args()) {
@@ -651,6 +706,8 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F) {
   auto *RI = ReturnInst::Create(*Ctx, EntryBB);
   IRBuilder<> IRB(RI);
   IRB.SetCurrentDebugLocation(F.getEntryBlock().getTerminator()->getDebugLoc());
+
+  createGlobalCalls(M, IRB);
 
   Argument *ArgsPtr = MainFn->getArg(0);
   unsigned Idx = 0;

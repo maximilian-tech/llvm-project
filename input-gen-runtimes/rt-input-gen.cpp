@@ -112,25 +112,34 @@ struct InputGenRTTy {
 
   int rand() { return Rand(Gen); }
 
-  void *getNewObj(uint64_t Size, bool Artifical) {
-    printf("Get new obj %lu\n", Size);
+  static void *getNewObjImpl(uint64_t Size, bool Artifical, ObjectTy *&LastObj,
+                             HeapTy *&Heap) {
+    int64_t AlignedSize = Size + (-Size & (16 - 1));
+    printf("Get new obj %lu :: %lu\n", Size, AlignedSize);
     void *Loc;
-    if (LastObj && advance(LastObj->end(), Size) < Heap->end()) {
+    if (LastObj && advance(LastObj->end(), AlignedSize) < Heap->end()) {
       Loc = LastObj->end();
     } else {
       if (LastObj)
         Heap = new HeapTy(Heap);
       Loc = Heap->begin();
     }
-    LastObj = new ObjectTy(Loc, Size, Artifical);
+    LastObj = new ObjectTy(Loc, AlignedSize, Artifical);
+    return Loc;
+  }
+
+  void *getNewObj(uint64_t Size, bool Artifical) {
+    auto *Loc = getNewObjImpl(Size, Artifical, LastObj, Heap);
     ObjMap[Loc] = LastObj;
     return Loc;
   }
 
   template <typename T> T getNewValue(int Max = 1000) {
     NumNewValues++;
-    return rand() % Max;
+    T V = rand() % Max;
+    return V;
   }
+
   template <> void *getNewValue<void *>(int Max) {
     NumNewValues++;
     memset(Storage, 0, 64);
@@ -140,6 +149,14 @@ struct InputGenRTTy {
     void *V = *((void **)(Storage));
     return V;
   }
+
+  void registerGlobal(void *Global, void **ReplGlobal, int32_t GlobalSize) {
+    auto *Loc = getNewObj(GlobalSize, false);
+    Globals[Loc] = Globals.size();
+    *ReplGlobal = Loc;
+  }
+
+  std::map<void *, int> Globals;
 
   uint64_t NumNewValues = 0;
   char Storage[64];
@@ -288,10 +305,19 @@ struct InputGenRTTy {
       //      *Arg = Repos[It.second];
       RemapNum++;
     }
-    // auto AfterRemap = InputOut.tellp();
+    for (auto &GlobalIt : Globals) {
+      auto It = Repos.find(GlobalIt.first);
+      if (It == Repos.end())
+        continue;
+      uint32_t GlobalRemap = 2;
+      writeSingleEl(InputOut, /* TODO enum */ GlobalRemap);
+      writeSingleEl(InputOut, GlobalIt.second);
+      writeSingleEl(InputOut, It->second);
+      RemapNum++;
+    }
+
     InputOut.seekp(AfterArgs);
     writeSingleEl(InputOut, RemapNum);
-    // InputOut.seekp(AfterRemap);
   }
 };
 
@@ -324,6 +350,11 @@ void __inputgen_init() {
 }
 void __inputgen_deinit() {
   // getInputGenRT().init();
+}
+
+void __inputgen_global(int32_t NumGlobals, void *Global, void **ReplGlobal,
+                       int32_t GlobalSize) {
+  getInputGenRT().registerGlobal(Global, ReplGlobal, GlobalSize);
 }
 
 void *__inputgen_memmove(void *Tgt, void *Src, uint64_t N) {
