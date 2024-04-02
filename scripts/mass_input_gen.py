@@ -64,6 +64,7 @@ if __name__ == '__main__':
     ds = ds.skip(args.start)
     for (i, module) in zip(range(args.start, args.end), ds):
         igm_args['outdir'] = os.path.join(global_outdir, str(i))
+        os.makedirs(igm_args['outdir'], exist_ok=True)
         with open(igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
         #with tempfile.NamedTemporaryFile(dir='/tmp/', prefix='input-gen-input-', suffix='.bc') as module_file:
             module_file.write(module['content'])
