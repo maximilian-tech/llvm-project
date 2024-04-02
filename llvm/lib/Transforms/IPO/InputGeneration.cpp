@@ -439,6 +439,8 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
   IGI.stubDeclarations(M, TLI);
   IGI.provideGlobals(M);
 
+  EntryPoint.setLinkage(GlobalValue::ExternalLinkage);
+
   switch (IGI.Mode) {
   case IG_Record:
     IGI.instrumentEntryPoint(EntryPoint);
@@ -578,9 +580,9 @@ void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
       continue;
 
     if (Mode != IG_Record) {
-      Fn.setVisibility(GlobalValue::DefaultVisibility);
       Fn.setLinkage(GlobalValue::InternalLinkage);
     }
+
     Functions.insert(&Fn);
   }
 
@@ -624,7 +626,6 @@ void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
 
 void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
   Module &M = *F.getParent();
-  F.setLinkage(GlobalValue::ExternalLinkage);
   IRBuilder<> IRB(&*F.getEntryBlock().getFirstInsertionPt());
   IRB.SetCurrentDebugLocation(F.getEntryBlock().getTerminator()->getDebugLoc());
 
@@ -656,7 +657,7 @@ void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
       InputGenCallbackPrefix + "global",
       FunctionType::get(VoidTy, {Int32Ty, PtrTy, PtrTy, Int32Ty}, false));
 
-  auto NumGlobalsVal =
+  auto *NumGlobalsVal =
       ConstantInt::get(Int32Ty, MaybeExtInitializedGlobals.size());
   for (auto &It : MaybeExtInitializedGlobals) {
     auto *GV = It.first;
