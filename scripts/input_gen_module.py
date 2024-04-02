@@ -195,6 +195,16 @@ class InputGenModule:
             if len(func.times) != 0:
                 stats['num_input_ran_funcs'] += 1
 
+    def aggregate_statistics(self, stats, to_add):
+        for k, v in stats.items():
+            stats[k] += to_add[k]
+
+    def add_statistics(self, a, b):
+        c = self.get_empty_statistics()
+        self.aggregate_statistics(c, a)
+        self.aggregate_statistics(c, b)
+        return c
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('InputGenModule')

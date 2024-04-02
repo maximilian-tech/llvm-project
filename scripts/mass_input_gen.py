@@ -5,6 +5,8 @@ import subprocess
 import argparse
 import os
 import sys
+import multiprocessing
+import functools
 from datasets import load_dataset
 
 import input_gen_module
@@ -29,6 +31,24 @@ def precompile_runtime(fname):
     else:
         return fname
 
+
+def handle_single_module(task):
+    (i, module) = task
+
+    igm_args['outdir'] = os.path.join(global_outdir, str(i))
+    os.makedirs(igm_args['outdir'], exist_ok=True)
+    with open(igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
+    #with tempfile.NamedTemporaryFile(dir='/tmp/', prefix='input-gen-input-', suffix='.bc') as module_file:
+        module_file.write(module['content'])
+        module_file.flush()
+        igm_args['input_module'] = module_file.name
+
+        igm = input_gen_module.InputGenModule(**igm_args)
+        igm.generate_inputs()
+        igm.run_all_inputs()
+
+        return igm.get_statistics()
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('MassInputGen')
 
@@ -37,6 +57,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--start', type=int, default=0)
     parser.add_argument('--end', type=int, default=10)
+    # Number of cores available by default
+    parser.add_argument('--num-procs', type=int, default=None)
 
     parser.add_argument('--precompile-rts', action='store_true')
     parser.add_argument('--no-precompile-rts',
@@ -58,23 +80,13 @@ if __name__ == '__main__':
 
     global_outdir = args.outdir
     igm_args = vars(args)
-    stats = input_gen_module.InputGenModule().get_empty_statistics()
 
-    # TODO maybe use ray to distribute?
     ds = ds.skip(args.start)
-    for (i, module) in zip(range(args.start, args.end), ds):
-        igm_args['outdir'] = os.path.join(global_outdir, str(i))
-        os.makedirs(igm_args['outdir'], exist_ok=True)
-        with open(igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
-        #with tempfile.NamedTemporaryFile(dir='/tmp/', prefix='input-gen-input-', suffix='.bc') as module_file:
-            module_file.write(module['content'])
-            module_file.flush()
-            igm_args['input_module'] = module_file.name
+    with multiprocessing.Pool(args.num_procs) as pool:
+        tasks = list(zip(range(args.start, args.end), ds))
+        stats = pool.imap(handle_single_module, tasks, chunksize=2)
+        empty = input_gen_module.InputGenModule().get_empty_statistics()
+        agg_stats = functools.reduce(
+            input_gen_module.InputGenModule().add_statistics, list(stats), empty)
 
-            igm = input_gen_module.InputGenModule(**igm_args)
-            igm.generate_inputs()
-            igm.run_all_inputs()
-
-            igm.update_statistics(stats)
-
-    print('Statistics: {}'.format(stats))
+        print('Statistics: {}'.format(agg_stats))
