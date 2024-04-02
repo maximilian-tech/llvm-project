@@ -156,7 +156,7 @@ struct InputGenRTTy {
     *ReplGlobal = Loc;
   }
 
-  std::map<void *, int> Globals;
+  std::map<void *, uint64_t> Globals;
 
   uint64_t NumNewValues = 0;
   char Storage[64];
