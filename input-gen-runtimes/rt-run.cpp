@@ -1,7 +1,10 @@
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <random>
 #include <vector>
 
 template <typename T> static char *ccast(T *Ptr) {
@@ -35,46 +38,70 @@ int main(int argc, char **argv) {
 
   std::ifstream Input(InputName, std::ios::in | std::ios::binary);
 
+  auto Seed = readSingleEl<uint32_t>(Input);
+  std::mt19937 Gen;
+  std::uniform_int_distribution<> Rand;
+  Gen.seed(Seed);
+
   auto MemSize = readSingleEl<uint64_t>(Input);
   char *Memory = ccast(malloc(MemSize));
-  Input.read(ccast(Memory), MemSize);
   printf("MemSize %lu : %p\n", MemSize, Memory);
 
-  auto ArgsMemSize = readSingleEl<uint64_t>(Input);
-  char *ArgsMemory = ccast(malloc(ArgsMemSize));
-  Input.read(ccast(ArgsMemory), ArgsMemSize);
-  printf("Args %lu : %p\n", ArgsMemSize, ArgsMemory);
+  std::map<uint64_t, char *> ObjMap;
+  auto NumObjects = readSingleEl<uint32_t>(Input);
+  printf("NO %u\n", NumObjects);
+  for (uint32_t I = 0; I < NumObjects; I++) {
+    auto ObjIdx = readSingleEl<uint32_t>(Input);
+    auto Offset = readSingleEl<uint64_t>(Input);
+    printf("O %u -> %lu\n", ObjIdx, Offset);
 
-  auto RemapNum = readSingleEl<uint64_t>(Input);
-  for (uint64_t I = 0; I < RemapNum; I++) {
-    auto Kind = readSingleEl<uint32_t>(Input);
-    auto From = readSingleEl<uint64_t>(Input);
-    auto To = readSingleEl<uint64_t>(Input);
-    printf("%lu) %i: %lu -> %lu\n", I, Kind, From, To);
-    assert(To <= MemSize);
-    if (Kind == 0) {
-      // Heap
-      assert(From < MemSize);
-      *(&((void **)Memory)[From]) = (void *)&Memory[To];
-    } else if (Kind == 1) {
-      // Arguments
-      assert(From < ArgsMemSize / sizeof(uintptr_t));
-      *(&((void **)ArgsMemory)[From]) = (void *)&Memory[To];
-    } else if (Kind == 2) {
-      // Globals
-      Globals.resize(std::max(Globals.size(), From + 1));
-      assert(!Globals[From]);
-      Globals[From] = &Memory[To];
-      printf("Global stored\n");
-    } else {
-      exit(2);
-    }
+    assert(Offset <= MemSize);
+    ObjMap[ObjIdx] = Memory + Offset;
   }
 
-  for (unsigned long I = 0; I < ArgsMemSize; I += sizeof(void *))
-    printf("[%lu] %i : %f : %li : %lf : %p\n", I, *((int *)&ArgsMemory[I]),
-           *((float *)&ArgsMemory[I]), *((long int *)&ArgsMemory[I]),
-           *((double *)&ArgsMemory[I]), *((void **)&ArgsMemory[I]));
+  auto NumGlobals = readSingleEl<uint32_t>(Input);
+  for (uint32_t I = 0; I < NumGlobals; I++) {
+    auto ObjIdx = readSingleEl<uint32_t>(Input);
+    printf("G %u -> %lu\n", I, ObjIdx);
+    assert(ObjMap.count(ObjIdx));
+    Globals.push_back(ObjMap[ObjIdx]);
+  }
+
+  auto NumVals = readSingleEl<uint32_t>(Input);
+  for (uint32_t I = 0; I < NumVals; ++I) {
+    uint32_t ObjIdx = readSingleEl<uint32_t>(Input);
+    ptrdiff_t Offset = readSingleEl<ptrdiff_t>(Input);
+    uint32_t ContentOrIdxKind = readSingleEl<int32_t>(Input);
+    uintptr_t ContentOrIdx = readSingleEl<uintptr_t>(Input);
+    uint32_t Size = readSingleEl<uint32_t>(Input);
+    printf("ObjIdx %u\n", ObjIdx);
+    assert(ObjMap.count(ObjIdx));
+    char *Tgt = ObjMap[ObjIdx] + Offset;
+    char *Src;
+    if (ContentOrIdxKind == /* Idx */ 0) {
+      assert(ObjMap.count(ContentOrIdx));
+      ContentOrIdx = (uintptr_t)ObjMap[ContentOrIdx];
+    } else if (ContentOrIdxKind == /* Content */ 1) {
+    } else {
+      printf("Error\n");
+      exit(4);
+    }
+    Src = ccast(&ContentOrIdx);
+    memcpy(Tgt, Src, Size);
+  }
+
+  auto NumArgs = readSingleEl<uint32_t>(Input);
+  char *ArgsMemory = ccast(malloc(NumArgs * sizeof(uintptr_t)));
+  printf("Args %lu : %p\n", NumArgs, ArgsMemory);
+  for (uint32_t I = 0; I < NumArgs; ++I) {
+    auto Content = readSingleEl<uintptr_t>(Input);
+    auto ObjIdx = readSingleEl<int32_t>(Input);
+    if (ObjIdx != -1) {
+      assert(ObjMap.count(ObjIdx));
+      Content = (uintptr_t)ObjMap[ObjIdx];
+    }
+    memcpy(ArgsMemory + I * sizeof(void *), &Content, sizeof(void *));
+  }
 
   printf("Run\n");
   __inputrun_entry(ArgsMemory);

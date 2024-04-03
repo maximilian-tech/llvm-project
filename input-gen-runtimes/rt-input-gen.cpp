@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <bitset>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -12,6 +13,7 @@
 #include <map>
 #include <omp.h>
 #include <random>
+#include <set>
 #include <type_traits>
 #include <vector>
 
@@ -21,26 +23,44 @@ static void *advance(void *Ptr, uint64_t Bytes) {
 
 struct ObjectTy {
   ObjectTy(void *Data, uint64_t Size, bool Artifical = true)
-      : Size(Size), Data(Data) {}
+      : Size(Size), Data(Data), Idx(getObjIdx()) {}
+  ObjectTy(const ObjectTy &Other)
+      : Size(Other.Size), Data(Other.Data), Idx(Other.Idx) {}
 
   uint64_t Size = 0;
   void *Data = nullptr;
+  uint32_t Idx;
+
   void *begin() { return Data; }
   void *end() { return advance(Data, Size); }
+  static int32_t getObjIdx() {
+    static int32_t ObjIdxCnt = 0;
+    return ++ObjIdxCnt;
+  }
+};
+struct ObjectCmpTy {
+  bool operator()(const ObjectTy *LHS, const ObjectTy *RHS) const {
+    return LHS->Idx < RHS->Idx;
+  };
 };
 
-typedef uintptr_t ArgTy;
+struct ArgTy {
+  uintptr_t Content;
+  int32_t ObjIdx;
+};
+
 template <typename T> static T fromArgTy(ArgTy U) {
   static_assert(sizeof(T) <= sizeof(U));
   T A;
-  memcpy(&A, &U, sizeof(A));
+  memcpy(&A, &U.Content, sizeof(A));
   return A;
 }
 
-template <typename T> static ArgTy toArgTy(T A) {
+template <typename T> static ArgTy toArgTy(T A, int32_t ObjIdx) {
   ArgTy U;
   static_assert(sizeof(T) <= sizeof(U));
-  memcpy(&U, &A, sizeof(A));
+  memcpy(&U.Content, &A, sizeof(A));
+  U.ObjIdx = ObjIdx;
   return U;
 }
 
@@ -77,13 +97,19 @@ struct HeapTy : ObjectTy {
   template <typename T> T read(void *Ptr, void *Base, uint32_t Size);
 
   template <typename T>
-  void write(T *Ptr, T Val, uint32_t Size, bool DueToRead = false) {
+  void write(T *Ptr, T Val, uint32_t Size, bool DueToRead = false,
+             int32_t ObjIdx = -1) {
     if (begin() <= Ptr && advance(Ptr, Size) < end()) {
+      if (isUsed(Ptr, Size))
+        return;
       markUsed(Ptr, Size);
-      memcpy(Ptr, &Val, Size);
-      if constexpr (std::is_pointer<T>::value)
+      if (DueToRead)
+        memcpy(Ptr, &Val, Size);
+      if constexpr (std::is_pointer<T>::value) {
         if (DueToRead)
-          PtrMap[Ptr] = Val;
+          PtrMap[Ptr] = ObjIdx;
+      }
+      ValMap[Ptr] = {(uintptr_t)Val, Size};
     } else if (LastHeap) {
       LastHeap->write(Ptr, Val, Size, DueToRead);
     } else {
@@ -92,7 +118,8 @@ struct HeapTy : ObjectTy {
     }
   }
 
-  std::map<void *, void *> PtrMap;
+  std::map<void *, int32_t> PtrMap;
+  std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
 };
 
 struct InputGenRTTy {
@@ -103,7 +130,7 @@ struct InputGenRTTy {
   }
   ~InputGenRTTy() { report(); }
 
-  int Seed;
+  int32_t Seed;
   std::string OutputDir;
   std::filesystem::path ExecPath;
   std::mt19937 Gen;
@@ -112,8 +139,8 @@ struct InputGenRTTy {
 
   int rand() { return Rand(Gen); }
 
-  static void *getNewObjImpl(uint64_t Size, bool Artifical, ObjectTy *&LastObj,
-                             HeapTy *&Heap) {
+  static ObjectTy *getNewObjImpl(uint64_t Size, bool Artifical,
+                                 ObjectTy *&LastObj, HeapTy *&Heap) {
     int64_t AlignedSize = Size + (-Size & (16 - 1));
     printf("Get new obj %lu :: %lu\n", Size, AlignedSize);
     void *Loc;
@@ -125,38 +152,42 @@ struct InputGenRTTy {
       Loc = Heap->begin();
     }
     LastObj = new ObjectTy(Loc, AlignedSize, Artifical);
-    return Loc;
+    return LastObj;
   }
 
-  void *getNewObj(uint64_t Size, bool Artifical) {
-    auto *Loc = getNewObjImpl(Size, Artifical, LastObj, Heap);
-    ObjMap[Loc] = LastObj;
-    return Loc;
+  ObjectTy *getNewObj(uint64_t Size, bool Artifical) {
+    auto *Obj = getNewObjImpl(Size, Artifical, LastObj, Heap);
+    Objects.insert(Obj);
+    return Obj;
   }
 
-  template <typename T> T getNewValue(int Max = 1000) {
+  template <typename T>
+  T getNewValue(int32_t *ObjIdx = nullptr, int Max = 1000) {
     NumNewValues++;
     T V = rand() % Max;
     return V;
   }
 
-  template <> void *getNewValue<void *>(int Max) {
+  template <> void *getNewValue<void *>(int32_t *ObjIdx, int Max) {
     NumNewValues++;
     memset(Storage, 0, 64);
     if (rand() % 1000) {
-      *reinterpret_cast<void **>(Storage) = getNewObj(1024 * 1024, true);
+      ObjectTy *Obj = getNewObj(1024 * 1024, true);
+      if (ObjIdx)
+        *ObjIdx = Obj->Idx;
+      *reinterpret_cast<void **>(Storage) = Obj->begin();
     }
     void *V = *((void **)(Storage));
     return V;
   }
 
   void registerGlobal(void *Global, void **ReplGlobal, int32_t GlobalSize) {
-    auto *Loc = getNewObj(GlobalSize, false);
-    Globals[Loc] = Globals.size();
-    *ReplGlobal = Loc;
+    auto *Obj = getNewObj(GlobalSize, false);
+    Globals.push_back(Obj);
+    *ReplGlobal = Obj;
   }
 
-  std::map<void *, uint64_t> Globals;
+  std::vector<ObjectTy *> Globals;
 
   uint64_t NumNewValues = 0;
   char Storage[64];
@@ -164,7 +195,7 @@ struct InputGenRTTy {
   std::vector<ArgTy> Args;
 
   ObjectTy *LastObj = 0;
-  std::map<void *, ObjectTy *> ObjMap;
+  std::set<ObjectTy *, ObjectCmpTy> Objects;
 
   HeapTy *Heap;
 
@@ -202,44 +233,26 @@ struct InputGenRTTy {
   void report(FILE *ReportOut, std::ofstream &InputOut) {
     fprintf(ReportOut, "Args (%zu total)\n", Args.size());
     for (size_t I = 0; I < Args.size(); ++I)
-      fprintf(ReportOut, "Arg %zu: %p\n", I, (void *)Args[I]);
-    fprintf(ReportOut, "\nNum new values: %lu\n", NumNewValues);
-    fprintf(ReportOut, "\nHeap PtrMap: %lu\n", Heap->PtrMap.size());
-    fprintf(ReportOut, "\nObjects (%zu total)\n", ObjMap.size());
+      fprintf(ReportOut, "Arg %zu: %p\n", I, (void *)Args[I].Content);
+    fprintf(ReportOut, "Num new values: %lu\n", NumNewValues);
+    fprintf(ReportOut, "Heap PtrMap: %lu\n", Heap->PtrMap.size());
+    fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
+    fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
 
-    uintptr_t Min = -1, Max = 0;
-    for (auto &It : ObjMap) {
-      auto *ObjLIt = It.second->begin();
-      auto *ObjRIt = It.second->end();
-      while (ObjRIt != ObjLIt) {
-        if (Heap->isUsed(ObjLIt, 1))
-          break;
-        ObjLIt = advance(ObjLIt, 1);
-      }
-      while (ObjRIt != ObjLIt) {
-        if (Heap->isUsed(advance(ObjRIt, -1), 1))
-          break;
-        ObjRIt = advance(ObjRIt, -1);
-      }
-      if (ObjLIt == ObjRIt)
-        continue;
-      fprintf(ReportOut, "Obj [%p : %p] %lu)\n", ObjLIt, ObjRIt,
-              ((char *)ObjRIt - (char *)ObjLIt));
-      Min = std::min(Min, uintptr_t(ObjLIt));
-      Max = std::max(Max, uintptr_t(ObjRIt));
-    }
-    fprintf(ReportOut, "Heap %p : Min %p :: Max %p\n", Heap->begin(),
-            (void *)Min, (void *)Max);
-    fprintf(ReportOut, "%lu\n", (char *)Min - (char *)Heap->begin());
+    writeSingleEl(InputOut, Seed);
 
-    std::map<uint64_t, void *> Remap;
-    std::map<void *, uint64_t> Repos;
-    uintptr_t Idx = 0;
+    auto BeforeTotalSize = InputOut.tellp();
     uint64_t TotalSize = 0;
-    InputOut.seekp(sizeof(Idx));
-    for (auto &It : ObjMap) {
-      auto *ObjLIt = It.second->begin();
-      auto *ObjRIt = It.second->end();
+    writeSingleEl(InputOut, TotalSize);
+
+    uint32_t NumObjects = Objects.size();
+    writeSingleEl(InputOut, NumObjects);
+
+    std::map<void *, ObjectTy *> TrimmedObjs;
+    std::map<uint64_t, void *> Remap;
+    for (auto &It : Objects) {
+      auto *ObjLIt = It->begin();
+      auto *ObjRIt = It->end();
       while (ObjRIt != ObjLIt) {
         if (Heap->isUsed(ObjLIt, 1))
           break;
@@ -250,74 +263,79 @@ struct InputGenRTTy {
           break;
         ObjRIt = advance(ObjRIt, -1);
       }
-      // if (ObjLIt == ObjRIt)
-      //   continue;
       uint64_t Size =
           reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
       printf("Size %lu\n", Size);
+
+      writeSingleEl(InputOut, It->Idx);
+      writeSingleEl(InputOut, TotalSize);
+
       TotalSize += Size;
-      //      writeSingleEl(InputOut, Size);
-      InputOut.write(reinterpret_cast<const char *>(ObjLIt), Size);
-
-      Repos[It.second->begin()] = Idx;
-      auto PtrEnd = Heap->PtrMap.end();
-      while (ObjRIt != ObjLIt) {
-        auto PtrIt = Heap->PtrMap.find(ObjLIt);
-        if (PtrIt != PtrEnd) {
-          Remap[Idx] = PtrIt->second;
-        }
-        ObjLIt = advance(ObjLIt, 1);
-        ++Idx;
-      }
+      if (ObjLIt != ObjRIt)
+        TrimmedObjs[ObjLIt] = It;
     }
+
     printf("TotalSize %lu\n", TotalSize);
-    auto AfterMemory = InputOut.tellp();
-    InputOut.seekp(0);
+    auto BeforeNumGlobals = InputOut.tellp();
+    InputOut.seekp(BeforeTotalSize);
     writeSingleEl(InputOut, TotalSize);
-    InputOut.seekp(AfterMemory);
+    InputOut.seekp(BeforeNumGlobals);
 
-    uint64_t ArgsSize = Args.size() * sizeof(Args[0]);
-    writeSingleEl(InputOut, ArgsSize);
-    InputOut.write(ccast(Args.data()), ArgsSize);
-    auto AfterArgs = InputOut.tellp();
+    uint32_t NumGlobals = Globals.size();
+    writeSingleEl(InputOut, NumGlobals);
 
-    uint64_t RemapNum = 0;
-    // We will write the RemapNum here later
-    InputOut.seekp(sizeof(RemapNum), std::ios_base::cur);
+    for (uint32_t I = 0; I < NumGlobals; ++I) {
+      writeSingleEl(InputOut, Globals[I]->Idx);
+    }
 
-    for (auto &It : Remap) {
-      if (Repos.count(It.second)) {
-        uint32_t MemRemap = 0;
-        writeSingleEl(InputOut, /* TODO enum */ MemRemap);
-        writeSingleEl(InputOut, It.first);
-        writeSingleEl(InputOut, Repos[It.second]);
-        RemapNum++;
+    // std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
+    auto End = TrimmedObjs.end();
+    if (TrimmedObjs.empty() && !Heap->ValMap.empty()) {
+      printf("Problem, no objects!");
+      exit(2);
+    }
+
+    uint32_t NumVals = Heap->ValMap.size();
+    writeSingleEl(InputOut, NumVals);
+
+    for (auto &ValIt : Heap->ValMap) {
+      auto It = TrimmedObjs.upper_bound(ValIt.first);
+      if (It == TrimmedObjs.begin()) {
+        printf("Problem, it is begin()");
+        exit(3);
       }
-    }
-    for (uint64_t ArgNo = 0; ArgNo < Args.size(); ++ArgNo) {
-      auto It = Repos.find((void *)Args[ArgNo]);
-      if (It == Repos.end())
-        continue;
-      uint32_t ArgRemap = 1;
-      writeSingleEl(InputOut, /* TODO enum */ ArgRemap);
-      writeSingleEl(InputOut, ArgNo);
-      writeSingleEl(InputOut, It->second);
-      //      *Arg = Repos[It.second];
-      RemapNum++;
-    }
-    for (auto &GlobalIt : Globals) {
-      auto It = Repos.find(GlobalIt.first);
-      if (It == Repos.end())
-        continue;
-      uint32_t GlobalRemap = 2;
-      writeSingleEl(InputOut, /* TODO enum */ GlobalRemap);
-      writeSingleEl(InputOut, GlobalIt.second);
-      writeSingleEl(InputOut, It->second);
-      RemapNum++;
+      --It;
+      printf("%p :: %p\n", ValIt.first, It->second->begin());
+      ptrdiff_t Offset = reinterpret_cast<char *>(ValIt.first) -
+                         reinterpret_cast<char *>(It->second->begin());
+      printf("%lu\n", Offset);
+      assert(Offset >= 0);
+      writeSingleEl(InputOut, It->second->Idx);
+      writeSingleEl(InputOut, Offset);
+      auto PtrIt = Heap->PtrMap.find(ValIt.first);
+
+      // Write the obj idx next if its a pointer or the value
+      enum Kind : uint32_t {
+        Idx = 0,
+        Content = 1,
+      };
+      if (PtrIt != Heap->PtrMap.end()) {
+        writeSingleEl(InputOut, /* Enum */ Kind::Idx);
+        writeSingleEl(InputOut, (uintptr_t)PtrIt->second);
+      } else {
+        writeSingleEl(InputOut, /* Enum */ Kind::Content);
+        writeSingleEl(InputOut, ValIt.second.first);
+      }
+      // Write the size
+      writeSingleEl(InputOut, ValIt.second.second);
     }
 
-    InputOut.seekp(AfterArgs);
-    writeSingleEl(InputOut, RemapNum);
+    uint32_t NumArgs = Args.size();
+    writeSingleEl(InputOut, NumArgs);
+    for (auto &Arg : Args) {
+      writeSingleEl(InputOut, Arg.Content);
+      writeSingleEl(InputOut, Arg.ObjIdx);
+    }
   }
 };
 
@@ -335,7 +353,9 @@ template <typename T> T HeapTy::read(void *Ptr, void *Base, uint32_t Size) {
     return *reinterpret_cast<T *>(Ptr);
   }
   if (!isUsed(Ptr, Size)) {
-    write((T *)Ptr, getInputGenRT().getNewValue<T>(), Size, true);
+    int32_t ObjIdx = -1;
+    write((T *)Ptr, getInputGenRT().getNewValue<T>(&ObjIdx), Size, true,
+          ObjIdx);
     assert(isUsed(Ptr, Size));
   }
   assert(begin() <= Ptr && advance(Ptr, Size) < end());
@@ -409,9 +429,9 @@ RW(void *, ptr)
 
 #define ARG(TY, NAME)                                                          \
   TY __inputgen_arg_##NAME(TY Arg) {                                           \
+    int32_t ObjIdx = -1;                                                       \
     getInputGenRT().Args.push_back(                                            \
-        toArgTy<TY>(getInputGenRT().getNewValue<TY>()));                       \
-    printf("arg %p\n", (void *)getInputGenRT().Args.back());                   \
+        toArgTy<TY>(getInputGenRT().getNewValue<TY>(&ObjIdx), ObjIdx));        \
     return fromArgTy<TY>(getInputGenRT().Args.back());                         \
   }
 
