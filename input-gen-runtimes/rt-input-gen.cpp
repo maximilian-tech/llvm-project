@@ -106,7 +106,6 @@ struct HeapTy : ObjectTy {
       if (DueToRead)
         memcpy(Ptr, &Val, Size);
       if constexpr (std::is_pointer<T>::value) {
-        assert(Val == 0 || ObjIdx >= 0);
         if (DueToRead && ObjIdx != -1)
           PtrMap[Ptr] = ObjIdx;
       }
@@ -130,17 +129,19 @@ struct InputGenRTTy {
       : Seed(Seed), OutputDir(OutputDir), ExecPath(ExecPath),
         Heap(new HeapTy()) {
     Gen.seed(Seed);
+    SeedStub = rand(false);
+    GenStub.seed(SeedStub);
   }
   ~InputGenRTTy() { report(); }
 
-  int32_t Seed;
+  int32_t Seed, SeedStub;
   std::string OutputDir;
   std::filesystem::path ExecPath;
-  std::mt19937 Gen;
+  std::mt19937 Gen, GenStub;
   std::uniform_int_distribution<> Rand;
   std::vector<char> Conds;
 
-  int rand() { return Rand(Gen); }
+  int rand(bool Stub) { return Stub ? Rand(GenStub) : Rand(Gen); }
 
   static ObjectTy *getNewObjImpl(uint64_t Size, bool Artifical,
                                  ObjectTy *&LastObj, HeapTy *&Heap) {
@@ -165,16 +166,16 @@ struct InputGenRTTy {
   }
 
   template <typename T>
-  T getNewValue(int32_t *ObjIdx = nullptr, int Max = 1000) {
+  T getNewValue(int32_t *ObjIdx = nullptr, bool Stub = false, int Max = 100) {
     NumNewValues++;
-    T V = rand() % Max;
+    T V = rand(Stub) % Max;
     return V;
   }
 
-  template <> void *getNewValue<void *>(int32_t *ObjIdx, int Max) {
+  template <> void *getNewValue<void *>(int32_t *ObjIdx, bool Stub, int Max) {
     NumNewValues++;
     memset(Storage, 0, 64);
-    if (rand() % 1000) {
+    if (rand(Stub) % 100) {
       ObjectTy *Obj = getNewObj(1024 * 1024, true);
       if (ObjIdx)
         *ObjIdx = Obj->Idx;
@@ -242,7 +243,7 @@ struct InputGenRTTy {
     fprintf(ReportOut, "Heap ValMap: %lu\n", Heap->ValMap.size());
     fprintf(ReportOut, "Objects (%zu total)\n", Objects.size());
 
-    writeSingleEl(InputOut, Seed);
+    writeSingleEl(InputOut, SeedStub);
 
     auto BeforeTotalSize = InputOut.tellp();
     uint64_t TotalSize = 0;
@@ -411,7 +412,7 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
 #define RW(TY, NAME)                                                           \
   TY __inputgen_get_##NAME() {                                                 \
     int32_t ObjIdx = -1;                                                       \
-    TY V = getInputGenRT().getNewValue<TY>(&ObjIdx);                           \
+    TY V = getInputGenRT().getNewValue<TY>(&ObjIdx, true);                     \
     if constexpr (std::is_pointer<TY>::value)                                  \
       GetObjects.push_back(ObjIdx);                                            \
     return V;                                                                  \
