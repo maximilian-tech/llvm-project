@@ -484,6 +484,8 @@ ARG(void *, ptr)
 #undef ARG
 
 int __inputgen_entry(int, char **);
+
+void free(void *) {}
 }
 
 int main(int argc, char **argv) {

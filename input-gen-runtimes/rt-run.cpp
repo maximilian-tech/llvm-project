@@ -21,7 +21,6 @@ template <typename T> static T readSingleEl(std::ifstream &Input) {
 }
 
 // TODO
-void free(void *) {}
 
 static std::vector<void *> GetObjectPtrs;
 static unsigned GetObjectIdx = 0;
@@ -66,6 +65,8 @@ RW(double, double)
 RW(void *, ptr)
 
 #undef RW
+
+void free(void *) {}
 }
 
 int main(int argc, char **argv) {
@@ -159,6 +160,7 @@ int main(int argc, char **argv) {
   printf("Run\n");
   __inputrun_entry(ArgsMemory);
 
+  // TODO: we intercept free
   free(ArgsMemory);
   free(Memory);
 }
