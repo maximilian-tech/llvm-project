@@ -140,8 +140,9 @@ class InputGenModule:
                     out, err = proc.communicate(timeout=self.input_gen_timeout)
 
                     if proc.returncode != 0:
-                        print('Input gen process failed')
+                        print('Input gen process failed: @{}'.format(fname))
                     else:
+                        print('Input gen process succeeded: @{}'.format(fname))
                         # Populate the generated inputs
                         func.inputs = [
                             os.path.join(inputs_dir,
@@ -153,9 +154,9 @@ class InputGenModule:
                             assert(os.path.isfile(input))
 
                 except subprocess.CalledProcessError as e:
-                    print('Input gen process failed')
+                    print('Input gen process failed: @{}'.format(fname))
                 except subprocess.TimeoutExpired as e:
-                    print("Input gen timed out! Terminating...")
+                    print('Input gen timed out! Terminating...: @{}'.format(fname))
                     proc.terminate()
                     try:
                         proc.communicate(timeout=1)

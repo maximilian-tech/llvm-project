@@ -21,6 +21,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -98,6 +99,13 @@ static cl::opt<std::string>
 STATISTIC(NumInstrumented, "Number of instrumented instructions");
 
 namespace {
+
+bool isLibCGlobal(StringRef Name) {
+  return StringSwitch<bool>(Name)
+      .Case("stderr", true)
+      .Case("stdout", true)
+      .Default(false);
+}
 
 std::string getTypeName(const Type *Ty) {
   switch (Ty->getTypeID()) {
@@ -370,6 +378,8 @@ void InputGenInstrumenter::instrumentAddress(
                           : getUnderlyingObject(Access.Addr, /*MaxLookup=*/12)};
   if (isa<AllocaInst>(Args[3]))
     return;
+  if (isa<GlobalVariable>(Args[3]))
+    return;
   if (auto *Arg = dyn_cast<Argument>(Args[3]))
     if (Arg->onlyReadsMemory())
       return;
@@ -553,6 +563,8 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
 
 void InputGenInstrumenter::provideGlobals(Module &M) {
   for (GlobalVariable &GV : M.globals()) {
+    if (isLibCGlobal(GV.getName()))
+      continue;
     if (GV.hasExternalLinkage() || !GV.isConstant())
       MaybeExtInitializedGlobals.push_back({&GV, nullptr});
     if (!GV.hasExternalLinkage())

@@ -17,26 +17,31 @@
 #include <type_traits>
 #include <vector>
 
+static int VERBOSE = 0;
+
 static void *advance(void *Ptr, uint64_t Bytes) {
   return reinterpret_cast<char *>(Ptr) + Bytes;
 }
 
 struct ObjectTy {
   ObjectTy(void *Data, uint64_t Size, bool Artifical = true)
-      : Size(Size), Data(Data), Idx(getObjIdx()) {}
+      : Idx(getObjIdx()), Size(Size), Data(Data) {}
   ObjectTy(const ObjectTy &Other)
-      : Size(Other.Size), Data(Other.Data), Idx(Other.Idx) {}
+      : Idx(Other.Idx), Size(Other.Size), Data(Other.Data) {}
 
-  uint64_t Size = 0;
-  void *Data = nullptr;
-  uint32_t Idx;
-
+  uint64_t getSize() const { return Size; }
   void *begin() { return Data; }
   void *end() { return advance(Data, Size); }
   static int32_t getObjIdx() {
     static int32_t ObjIdxCnt = 0;
     return ++ObjIdxCnt;
   }
+
+  const uint32_t Idx;
+
+private:
+  uint64_t Size = 0;
+  void *Data = nullptr;
 };
 struct ObjectCmpTy {
   bool operator()(const ObjectTy *LHS, const ObjectTy *RHS) const {
@@ -76,21 +81,21 @@ struct HeapTy : ObjectTy {
   std::bitset<(HeapSize / 8)> UsedSet;
 
   bool isUsed(void *Ptr, int64_t Size) {
-    uintptr_t Offset = (uintptr_t)Ptr - (uintptr_t)Data;
+    uintptr_t Offset = (uintptr_t)Ptr - (uintptr_t)begin();
     uintptr_t Idx = Offset / 8;
     bool Res = true;
     do {
       Res &= UsedSet[Idx++];
-      Size -= 8;
+      Size -= 1;
     } while (Size > 0);
     return Res;
   }
   void markUsed(void *Ptr, int64_t Size) {
-    uintptr_t Offset = (uintptr_t)Ptr - (uintptr_t)Data;
+    uintptr_t Offset = (uintptr_t)Ptr - (uintptr_t)begin();
     uintptr_t Idx = Offset / 8;
     do {
       UsedSet.set(Idx++);
-      Size -= 8;
+      Size -= 1;
     } while (Size > 0);
   }
 
@@ -113,7 +118,8 @@ struct HeapTy : ObjectTy {
     } else if (LastHeap) {
       LastHeap->write(Ptr, Val, Size, DueToRead);
     } else {
-      //      printf("Out of bound write at %p\n", (void *)Ptr);
+      if (VERBOSE)
+        printf("Out of bound write at %p\n", (void *)Ptr);
       // exit(1);
     }
   }
@@ -146,7 +152,8 @@ struct InputGenRTTy {
   static ObjectTy *getNewObjImpl(uint64_t Size, bool Artifical,
                                  ObjectTy *&LastObj, HeapTy *&Heap) {
     int64_t AlignedSize = Size + (-Size & (16 - 1));
-    // printf("Get new obj %lu :: %lu\n", Size, AlignedSize);
+    if (VERBOSE)
+      printf("Get new obj %lu :: %lu\n", Size, AlignedSize);
     void *Loc;
     if (LastObj && advance(LastObj->end(), AlignedSize) < Heap->end()) {
       Loc = LastObj->end();
@@ -156,6 +163,8 @@ struct InputGenRTTy {
       Loc = Heap->begin();
     }
     LastObj = new ObjectTy(Loc, AlignedSize, Artifical);
+    if (VERBOSE)
+      printf("Obj %p :: %p\n", LastObj->begin(), LastObj->end());
     return LastObj;
   }
 
@@ -166,7 +175,7 @@ struct InputGenRTTy {
   }
 
   template <typename T>
-  T getNewValue(int32_t *ObjIdx = nullptr, bool Stub = false, int Max = 100) {
+  T getNewValue(int32_t *ObjIdx = nullptr, bool Stub = false, int Max = 10) {
     NumNewValues++;
     T V = rand(Stub) % Max;
     return V;
@@ -175,7 +184,7 @@ struct InputGenRTTy {
   template <> void *getNewValue<void *>(int32_t *ObjIdx, bool Stub, int Max) {
     NumNewValues++;
     memset(Storage, 0, 64);
-    if (rand(Stub) % 100) {
+    if (rand(Stub) % 50) {
       ObjectTy *Obj = getNewObj(1024 * 1024, true);
       if (ObjIdx)
         *ObjIdx = Obj->Idx;
@@ -188,7 +197,10 @@ struct InputGenRTTy {
   void registerGlobal(void *Global, void **ReplGlobal, int32_t GlobalSize) {
     auto *Obj = getNewObj(GlobalSize, false);
     Globals.push_back(Obj);
-    *ReplGlobal = Obj;
+    if (VERBOSE)
+      printf("Global %p replaced with %p @ %p\n", Global, Obj->begin(),
+             ReplGlobal);
+    *ReplGlobal = Obj->begin();
   }
 
   std::vector<ObjectTy *> Globals;
@@ -257,11 +269,15 @@ struct InputGenRTTy {
     for (auto &It : Objects) {
       auto *ObjLIt = It->begin();
       auto *ObjRIt = It->end();
+      if (VERBOSE)
+        printf("%p : %p :: %lu\n", ObjLIt, ObjRIt, It->getSize());
       while (ObjRIt != ObjLIt) {
         if (Heap->isUsed(ObjLIt, 1))
           break;
         ObjLIt = advance(ObjLIt, 1);
       }
+      if (VERBOSE)
+        printf("%p : %p\n", ObjLIt, ObjRIt);
       while (ObjRIt != ObjLIt) {
         if (Heap->isUsed(advance(ObjRIt, -1), 1))
           break;
@@ -269,6 +285,8 @@ struct InputGenRTTy {
       }
       uint64_t Size =
           reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
+      if (VERBOSE)
+        printf("Size %lu\n", Size);
 
       writeSingleEl(InputOut, It->Idx);
       writeSingleEl(InputOut, TotalSize);
@@ -278,7 +296,8 @@ struct InputGenRTTy {
         TrimmedObjs[ObjLIt] = It;
     }
 
-    printf("TotalSize %lu\n", TotalSize);
+    if (VERBOSE)
+      printf("TotalSize %lu\n", TotalSize);
     auto BeforeNumGlobals = InputOut.tellp();
     InputOut.seekp(BeforeTotalSize);
     writeSingleEl(InputOut, TotalSize);
@@ -328,8 +347,9 @@ struct InputGenRTTy {
         writeSingleEl(InputOut, /* Enum */ Kind::CONTENT);
         Content = ValIt.second.first;
       }
-      // printf("%lu ---> %lu [%i]\n", Offset, Content,
-      //        (PtrIt == Heap->PtrMap.end()));
+      if (VERBOSE)
+        printf("%lu ---> %lu [%i]\n", Offset, Content,
+               (PtrIt == Heap->PtrMap.end()));
       writeSingleEl(InputOut, Content);
       // Write the size
       writeSingleEl(InputOut, ValIt.second.second);
@@ -359,8 +379,9 @@ template <typename T> T HeapTy::read(void *Ptr, void *Base, uint32_t Size) {
   if (begin() > Ptr || advance(Ptr, Size) >= end()) {
     if (LastHeap)
       return LastHeap->read<T>(Ptr, Base, Size);
-    //    printf("Out of bound read at %p < %p:%p < %p\n", begin(), Ptr,
-    //           advance(Ptr, sizeof(T)), end());
+    if (VERBOSE)
+      printf("Out of bound read at %p < %p:%p < %p\n", begin(), Ptr,
+             advance(Ptr, sizeof(T)), end());
     return *reinterpret_cast<T *>(Ptr);
   }
   if (!isUsed(Ptr, Size)) {
@@ -478,6 +499,8 @@ int main(int argc, char **argv) {
     std::cerr << "Wrong usage." << std::endl;
     return 1;
   }
+
+  VERBOSE = (bool)getenv("VERBOSE");
 
   int Size = End - Start;
   if (Size <= 0)

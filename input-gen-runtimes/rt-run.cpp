@@ -1,11 +1,14 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
 #include <random>
 #include <vector>
+
+static int VERBOSE = 0;
 
 template <typename T> static char *ccast(T *Ptr) {
   return reinterpret_cast<char *>(Ptr);
@@ -31,12 +34,12 @@ static std::uniform_int_distribution<> Rand;
 int rand() { return Rand(Gen); }
 
 template <typename T> T getNewValue() {
-  T V = rand() % 1000;
+  T V = rand() % 10;
   return V;
 }
 
 template <> void *getNewValue<void *>() {
-  if (!(rand() % 1000))
+  if (!(rand() % 50))
     return nullptr;
   return GetObjectPtrs[GetObjectIdx++];
 }
@@ -68,6 +71,9 @@ RW(void *, ptr)
 int main(int argc, char **argv) {
   if (argc != 2)
     return 1;
+
+  VERBOSE = (bool)getenv("VERBOSE");
+
   char *InputName = argv[1];
   printf("Replay %s\n", InputName);
 
@@ -78,15 +84,18 @@ int main(int argc, char **argv) {
 
   auto MemSize = readSingleEl<uint64_t>(Input);
   char *Memory = ccast(malloc(MemSize));
-  printf("MemSize %lu : %p\n", MemSize, Memory);
+  if (VERBOSE)
+    printf("MemSize %lu : %p\n", MemSize, Memory);
 
   std::map<uint64_t, char *> ObjMap;
   auto NumObjects = readSingleEl<uint32_t>(Input);
-  printf("NO %u\n", NumObjects);
+  if (VERBOSE)
+    printf("NO %u\n", NumObjects);
   for (uint32_t I = 0; I < NumObjects; I++) {
     auto ObjIdx = readSingleEl<uint32_t>(Input);
     auto Offset = readSingleEl<uint64_t>(Input);
-    printf("O %u -> %lu\n", ObjIdx, Offset);
+    if (VERBOSE)
+      printf("O %u -> %lu\n", ObjIdx, Offset);
 
     assert(Offset <= MemSize);
     ObjMap[ObjIdx] = Memory + Offset;
@@ -95,7 +104,8 @@ int main(int argc, char **argv) {
   auto NumGlobals = readSingleEl<uint32_t>(Input);
   for (uint32_t I = 0; I < NumGlobals; I++) {
     auto ObjIdx = readSingleEl<uint32_t>(Input);
-    printf("G %u -> %u\n", I, ObjIdx);
+    if (VERBOSE)
+      printf("G %u -> %u\n", I, ObjIdx);
     assert(ObjMap.count(ObjIdx));
     Globals.push_back(ObjMap[ObjIdx]);
   }
@@ -107,8 +117,9 @@ int main(int argc, char **argv) {
     uint32_t ContentOrIdxKind = readSingleEl<int32_t>(Input);
     uintptr_t ContentOrIdx = readSingleEl<uintptr_t>(Input);
     uint32_t Size = readSingleEl<uint32_t>(Input);
-    // printf("ObjIdx %u Kind %i COI %lu\n", ObjIdx, ContentOrIdxKind,
-    //       ContentOrIdx);
+    if (VERBOSE)
+      printf("ObjIdx %u Kind %i COI %lu\n", ObjIdx, ContentOrIdxKind,
+             ContentOrIdx);
     assert(ObjMap.count(ObjIdx));
     char *Tgt = ObjMap[ObjIdx] + Offset;
     char *Src;
@@ -126,7 +137,8 @@ int main(int argc, char **argv) {
 
   auto NumArgs = readSingleEl<uint32_t>(Input);
   char *ArgsMemory = ccast(malloc(NumArgs * sizeof(uintptr_t)));
-  printf("Args %u : %p\n", NumArgs, ArgsMemory);
+  if (VERBOSE)
+    printf("Args %u : %p\n", NumArgs, ArgsMemory);
   for (uint32_t I = 0; I < NumArgs; ++I) {
     auto Content = readSingleEl<uintptr_t>(Input);
     auto ObjIdx = readSingleEl<int32_t>(Input);
