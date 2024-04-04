@@ -188,11 +188,12 @@ public:
 
   AnalysisManager<Module> &MAM;
 
-private:
   void initializeCallbacks(Module &M);
 
+private:
   // These arrays is indexed by AccessIsWrite
   DenseMap<std::pair<int, Type *>, FunctionCallee> InputGenMemoryAccessCallback;
+  DenseMap<Type *, FunctionCallee> ValueGenCallback;
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
 };
@@ -436,6 +437,9 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
   FunctionAnalysisManager &FAM =
       IGI.MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   auto &TLI = FAM.getResult<TargetLibraryAnalysis>(EntryPoint);
+
+  IGI.initializeCallbacks(M);
+
   IGI.stubDeclarations(M, TLI);
   IGI.provideGlobals(M);
 
@@ -443,12 +447,12 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
 
   switch (IGI.Mode) {
   case IG_Record:
-    IGI.instrumentEntryPoint(EntryPoint);
     IGI.createRecordingEntryPoint(EntryPoint);
+    IGI.instrumentEntryPoint(EntryPoint);
     break;
   case IG_Generate:
-    IGI.instrumentEntryPoint(EntryPoint);
     IGI.createGenerationEntryPoint(EntryPoint);
+    IGI.instrumentEntryPoint(EntryPoint);
     break;
   case IG_Run:
     IGI.createRunEntryPoint(EntryPoint);
@@ -499,6 +503,9 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
           M.getOrInsertFunction(Prefix + KindStr + "_" + getTypeName(Ty),
                                 VoidTy, PtrTy, Int64Ty, Int32Ty, PtrTy);
     }
+
+    ValueGenCallback[Ty] =
+        M.getOrInsertFunction(Prefix + "get_" + getTypeName(Ty), Ty);
   }
 
   InputGenMemmove =
@@ -510,8 +517,18 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
 }
 
 void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
+  auto Prefix = getCallbackPrefix(Mode);
+
   for (Function &F : M) {
-    if (!F.isDeclaration() || F.isIntrinsic())
+    if (!F.isDeclaration()) {
+      F.setLinkage(GlobalValue::InternalLinkage);
+      continue;
+    }
+
+    if (F.isIntrinsic())
+      continue;
+
+    if (F.getName().starts_with(Prefix))
       continue;
 
     LibFunc LF;
@@ -520,11 +537,17 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
 
     F.setLinkage(GlobalValue::WeakAnyLinkage);
     auto *EntryBB = BasicBlock::Create(*Ctx, "entry", &F);
-    if (F.getReturnType()->isVoidTy())
-      ReturnInst::Create(*Ctx, EntryBB);
+
+    IRBuilder<> IRB(EntryBB);
+    //  IRB.SetCurrentDebugLocation();
+
+    auto *RTy = F.getReturnType();
+    if (RTy->isVoidTy())
+      IRB.CreateRetVoid();
+    else if (ValueGenCallback.count(RTy))
+      IRB.CreateRet(IRB.CreateCall(ValueGenCallback[RTy]));
     else
-      ReturnInst::Create(*Ctx, Constant::getNullValue(F.getReturnType()),
-                         EntryBB);
+      IRB.CreateRet(Constant::getNullValue(RTy));
   }
 }
 
@@ -570,18 +593,12 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
 
 void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
 
-  initializeCallbacks(*F.getParent());
-
   Module &M = *F.getParent();
   SetVector<Function *> Functions;
   Functions.insert(&F);
   for (Function &Fn : M) {
     if (&Fn == &F || Fn.isDeclaration())
       continue;
-
-    if (Mode != IG_Record) {
-      Fn.setLinkage(GlobalValue::InternalLinkage);
-    }
 
     Functions.insert(&Fn);
   }

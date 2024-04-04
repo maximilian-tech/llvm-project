@@ -106,7 +106,8 @@ struct HeapTy : ObjectTy {
       if (DueToRead)
         memcpy(Ptr, &Val, Size);
       if constexpr (std::is_pointer<T>::value) {
-        if (DueToRead)
+        assert(Ptr == 0 || ObjIdx >= 0);
+        if (DueToRead && ObjIdx != -1)
           PtrMap[Ptr] = ObjIdx;
       }
       ValMap[Ptr] = {(uintptr_t)Val, Size};
@@ -121,6 +122,8 @@ struct HeapTy : ObjectTy {
   std::map<void *, int32_t> PtrMap;
   std::map<void *, std::pair<uintptr_t, uint32_t>> ValMap;
 };
+
+std::vector<int32_t> GetObjects;
 
 struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir, int Seed)
@@ -142,7 +145,7 @@ struct InputGenRTTy {
   static ObjectTy *getNewObjImpl(uint64_t Size, bool Artifical,
                                  ObjectTy *&LastObj, HeapTy *&Heap) {
     int64_t AlignedSize = Size + (-Size & (16 - 1));
-    printf("Get new obj %lu :: %lu\n", Size, AlignedSize);
+    // printf("Get new obj %lu :: %lu\n", Size, AlignedSize);
     void *Loc;
     if (LastObj && advance(LastObj->end(), AlignedSize) < Heap->end()) {
       Loc = LastObj->end();
@@ -265,7 +268,6 @@ struct InputGenRTTy {
       }
       uint64_t Size =
           reinterpret_cast<char *>(ObjRIt) - reinterpret_cast<char *>(ObjLIt);
-      printf("Size %lu\n", Size);
 
       writeSingleEl(InputOut, It->Idx);
       writeSingleEl(InputOut, TotalSize);
@@ -305,10 +307,8 @@ struct InputGenRTTy {
         exit(3);
       }
       --It;
-      printf("%p :: %p\n", ValIt.first, It->second->begin());
       ptrdiff_t Offset = reinterpret_cast<char *>(ValIt.first) -
                          reinterpret_cast<char *>(It->second->begin());
-      printf("%lu\n", Offset);
       assert(Offset >= 0);
       writeSingleEl(InputOut, It->second->Idx);
       writeSingleEl(InputOut, Offset);
@@ -316,16 +316,20 @@ struct InputGenRTTy {
 
       // Write the obj idx next if its a pointer or the value
       enum Kind : uint32_t {
-        Idx = 0,
-        Content = 1,
+        IDX = 0,
+        CONTENT = 1,
       };
+      uintptr_t Content;
       if (PtrIt != Heap->PtrMap.end()) {
-        writeSingleEl(InputOut, /* Enum */ Kind::Idx);
-        writeSingleEl(InputOut, (uintptr_t)PtrIt->second);
+        writeSingleEl(InputOut, /* Enum */ Kind::IDX);
+        Content = PtrIt->second;
       } else {
-        writeSingleEl(InputOut, /* Enum */ Kind::Content);
-        writeSingleEl(InputOut, ValIt.second.first);
+        writeSingleEl(InputOut, /* Enum */ Kind::CONTENT);
+        Content = ValIt.second.first;
       }
+      // printf("%lu ---> %lu [%i]\n", Offset, Content,
+      //        (PtrIt == Heap->PtrMap.end()));
+      writeSingleEl(InputOut, Content);
       // Write the size
       writeSingleEl(InputOut, ValIt.second.second);
     }
@@ -335,6 +339,12 @@ struct InputGenRTTy {
     for (auto &Arg : Args) {
       writeSingleEl(InputOut, Arg.Content);
       writeSingleEl(InputOut, Arg.ObjIdx);
+    }
+
+    uint32_t NumGetObjects = GetObjects.size();
+    writeSingleEl(InputOut, NumGetObjects);
+    for (auto ObjIdx : GetObjects) {
+      writeSingleEl(InputOut, ObjIdx);
     }
   }
 };
@@ -386,7 +396,6 @@ void *__inputgen_memmove(void *Tgt, void *Src, uint64_t N) {
   }
   return TgtIt;
 }
-
 void *__inputgen_memcpy(void *Tgt, void *Src, uint64_t N) {
   return __inputgen_memmove(Tgt, Src, N);
 }
@@ -400,6 +409,13 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
 }
 
 #define RW(TY, NAME)                                                           \
+  TY __inputgen_get_##NAME() {                                                 \
+    int32_t ObjIdx = -1;                                                       \
+    TY V = getInputGenRT().getNewValue<TY>(&ObjIdx);                           \
+    if constexpr (std::is_pointer<TY>::value)                                  \
+      GetObjects.push_back(ObjIdx);                                            \
+    return V;                                                                  \
+  }                                                                            \
   void __inputgen_read_##NAME(void *Ptr, int64_t Val, int32_t Size,            \
                               void *Base) {                                    \
     getInputGenRT().Heap->read<TY>(Ptr, Base, Size);                           \

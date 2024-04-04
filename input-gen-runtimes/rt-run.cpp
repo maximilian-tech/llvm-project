@@ -17,8 +17,29 @@ template <typename T> static T readSingleEl(std::ifstream &Input) {
   return El;
 }
 
+// TODO
+void free(void *) {}
+
+static std::vector<void *> GetObjectPtrs;
+static unsigned GetObjectIdx = 0;
+
 static std::vector<char *> Globals;
 static size_t GlobalsIt = 0;
+
+static std::mt19937 Gen;
+static std::uniform_int_distribution<> Rand;
+int rand() { return Rand(Gen); }
+
+template <typename T> T getNewValue() {
+  T V = rand() % 1000;
+  return V;
+}
+
+template <> void *getNewValue<void *>() {
+  if (!(rand() % 1000))
+    return nullptr;
+  return GetObjectPtrs[GetObjectIdx++];
+}
 
 extern "C" {
 void __inputgen_global(int32_t NumGlobals, void *Global, void **ReplGlobal,
@@ -28,6 +49,20 @@ void __inputgen_global(int32_t NumGlobals, void *Global, void **ReplGlobal,
 }
 
 void __inputrun_entry(char *);
+
+#define RW(TY, NAME)                                                           \
+  TY __inputrun_get_##NAME() { return getNewValue<TY>(); }
+
+RW(bool, i1)
+RW(char, i8)
+RW(short, i16)
+RW(int32_t, i32)
+RW(int64_t, i64)
+RW(float, float)
+RW(double, double)
+RW(void *, ptr)
+
+#undef RW
 }
 
 int main(int argc, char **argv) {
@@ -39,8 +74,6 @@ int main(int argc, char **argv) {
   std::ifstream Input(InputName, std::ios::in | std::ios::binary);
 
   auto Seed = readSingleEl<uint32_t>(Input);
-  std::mt19937 Gen;
-  std::uniform_int_distribution<> Rand;
   Gen.seed(Seed);
 
   auto MemSize = readSingleEl<uint64_t>(Input);
@@ -62,7 +95,7 @@ int main(int argc, char **argv) {
   auto NumGlobals = readSingleEl<uint32_t>(Input);
   for (uint32_t I = 0; I < NumGlobals; I++) {
     auto ObjIdx = readSingleEl<uint32_t>(Input);
-    printf("G %u -> %lu\n", I, ObjIdx);
+    printf("G %u -> %u\n", I, ObjIdx);
     assert(ObjMap.count(ObjIdx));
     Globals.push_back(ObjMap[ObjIdx]);
   }
@@ -74,7 +107,8 @@ int main(int argc, char **argv) {
     uint32_t ContentOrIdxKind = readSingleEl<int32_t>(Input);
     uintptr_t ContentOrIdx = readSingleEl<uintptr_t>(Input);
     uint32_t Size = readSingleEl<uint32_t>(Input);
-    printf("ObjIdx %u\n", ObjIdx);
+    // printf("ObjIdx %u Kind %i COI %lu\n", ObjIdx, ContentOrIdxKind,
+    //       ContentOrIdx);
     assert(ObjMap.count(ObjIdx));
     char *Tgt = ObjMap[ObjIdx] + Offset;
     char *Src;
@@ -92,7 +126,7 @@ int main(int argc, char **argv) {
 
   auto NumArgs = readSingleEl<uint32_t>(Input);
   char *ArgsMemory = ccast(malloc(NumArgs * sizeof(uintptr_t)));
-  printf("Args %lu : %p\n", NumArgs, ArgsMemory);
+  printf("Args %u : %p\n", NumArgs, ArgsMemory);
   for (uint32_t I = 0; I < NumArgs; ++I) {
     auto Content = readSingleEl<uintptr_t>(Input);
     auto ObjIdx = readSingleEl<int32_t>(Input);
@@ -101,6 +135,13 @@ int main(int argc, char **argv) {
       Content = (uintptr_t)ObjMap[ObjIdx];
     }
     memcpy(ArgsMemory + I * sizeof(void *), &Content, sizeof(void *));
+  }
+
+  auto NumGetObjects = readSingleEl<uint32_t>(Input);
+  for (uint32_t I = 0; I < NumGetObjects; ++I) {
+    auto ObjIdx = readSingleEl<int32_t>(Input);
+    assert(ObjMap.count(ObjIdx));
+    GetObjectPtrs.push_back(ObjMap[ObjIdx]);
   }
 
   printf("Run\n");

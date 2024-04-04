@@ -3014,12 +3014,16 @@ struct AAUndefinedBehaviorImpl : public AAUndefinedBehavior {
         //   (3) Simplified to null pointer where known to be nonnull.
         //       The argument is a poison value and violate noundef attribute.
         IRPosition CalleeArgumentIRP = IRPosition::callsite_argument(CB, idx);
+        bool UsedAssumedInformation = false;
+        if (A.isAssumedDead(
+                CalleeArgumentIRP, this, nullptr, UsedAssumedInformation,
+                /*CheckBBLivenessOnly=*/false, DepClassTy::OPTIONAL))
+          continue;
         bool IsKnownNoUndef;
         AA::hasAssumedIRAttr<Attribute::NoUndef>(
             A, this, CalleeArgumentIRP, DepClassTy::NONE, IsKnownNoUndef);
         if (!IsKnownNoUndef)
           continue;
-        bool UsedAssumedInformation = false;
         std::optional<Value *> SimplifiedVal =
             A.getAssumedSimplified(IRPosition::value(*ArgVal), *this,
                                    UsedAssumedInformation, AA::Interprocedural);

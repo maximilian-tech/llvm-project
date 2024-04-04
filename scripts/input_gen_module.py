@@ -30,6 +30,8 @@ class Function:
 
     def run_input(self, input, timeout):
         # Maybe we can time this
+        print('Running executables for', self.input_run_executable)
+
         try:
             start_time = time.time()
 
