@@ -106,7 +106,7 @@ struct HeapTy : ObjectTy {
       if (DueToRead)
         memcpy(Ptr, &Val, Size);
       if constexpr (std::is_pointer<T>::value) {
-        assert(Ptr == 0 || ObjIdx >= 0);
+        assert(Val == 0 || ObjIdx >= 0);
         if (DueToRead && ObjIdx != -1)
           PtrMap[Ptr] = ObjIdx;
       }
@@ -364,8 +364,8 @@ template <typename T> T HeapTy::read(void *Ptr, void *Base, uint32_t Size) {
   }
   if (!isUsed(Ptr, Size)) {
     int32_t ObjIdx = -1;
-    write((T *)Ptr, getInputGenRT().getNewValue<T>(&ObjIdx), Size, true,
-          ObjIdx);
+    T V = getInputGenRT().getNewValue<T>(&ObjIdx);
+    write((T *)Ptr, V, Size, true, ObjIdx);
     assert(isUsed(Ptr, Size));
   }
   assert(begin() <= Ptr && advance(Ptr, Size) < end());
