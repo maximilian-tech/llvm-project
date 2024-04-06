@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/InputGeneration.h"
+#include "llvm/Transforms/IPO/InputGenerationImpl.h"
 
 #include "llvm/ADT/EnumeratedArray.h"
 #include "llvm/ADT/SetVector.h"
@@ -52,9 +53,11 @@
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO/Attributor.h"
+#include "llvm/Transforms/IPO/InputGenerationImpl.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <cstdint>
+#include <memory>
 
 using namespace llvm;
 
@@ -80,6 +83,11 @@ static cl::opt<IGInstrumentationModeTy>
                         cl::values(clEnumValN(IG_Record, "record", ""),
                                    clEnumValN(IG_Generate, "generate", ""),
                                    clEnumValN(IG_Run, "run", "")));
+
+static cl::opt<bool>
+    ClPruneModule("input-gen-prune-module",
+                  cl::desc("Prune unneeded functions from module."), cl::Hidden,
+                  cl::init(true));
 
 static cl::opt<bool> ClInsertVersionCheck(
     "input-gen-guard-against-version-mismatch",
@@ -121,126 +129,14 @@ std::string getTypeName(const Type *Ty) {
     return "unknown";
   };
 }
-
-struct InterestingMemoryAccess {
-  Instruction *I = nullptr;
-  Value *Addr = nullptr;
-  Type *AccessTy;
-  Value *V = nullptr;
-  Value *MaybeMask = nullptr;
-
-  enum KindTy { WRITE, READ, READ_THEN_WRITE, Last = READ_THEN_WRITE } Kind;
-
-  static std::string kindAsStr(KindTy K) {
-    switch (K) {
-    case WRITE:
-      return "write";
-    case READ:
-      return "read";
-    case READ_THEN_WRITE:
-      return "read_write";
-    }
-    llvm_unreachable("Unknown kind");
-  }
-};
-
-/// Instrument the code in module to profile memory accesses.
-class InputGenInstrumenter {
-public:
-  InputGenInstrumenter(Module &M, AnalysisManager<Module> &MAM,
-                       IGInstrumentationModeTy Mode)
-      : Mode(Mode), MAM(MAM) {
-    Ctx = &(M.getContext());
-    PtrTy = PointerType::getUnqual(*Ctx);
-    Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
-    Int8Ty = IntegerType::getIntNTy(*Ctx, 8);
-    Int16Ty = IntegerType::getIntNTy(*Ctx, 16);
-    Int32Ty = IntegerType::getIntNTy(*Ctx, 32);
-    Int64Ty = IntegerType::getIntNTy(*Ctx, 64);
-    VoidTy = PointerType::getVoidTy(*Ctx);
-    FloatTy = Type::getFloatTy(*Ctx);
-    DoubleTy = Type::getDoubleTy(*Ctx);
-  }
-
-  /// If it is an interesting memory access, populate information
-  /// about the access and return a InterestingMemoryAccess struct.
-  /// Otherwise return std::nullopt.
-  std::optional<InterestingMemoryAccess>
-  isInterestingMemoryAccess(Instruction *I) const;
-
-  void instrumentMop(const InterestingMemoryAccess &Access,
-                     const DataLayout &DL);
-  void instrumentAddress(const InterestingMemoryAccess &Access,
-                         const DataLayout &DL);
-  void instrumentMaskedLoadOrStore(const InterestingMemoryAccess &Access,
-                                   const DataLayout &DL);
-  void instrumentMemIntrinsic(MemIntrinsic *MI);
-
-  void instrumentFunction(Function &F);
-  void instrumentEntryPoint(Function &F);
-  void createRecordingEntryPoint(Function &F);
-  void createGenerationEntryPoint(Function &F);
-  void createGlobalCalls(Module &M, IRBuilder<> &IRB);
-  void createRunEntryPoint(Function &F);
-  void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
-  void provideGlobals(Module &M);
-
-  SmallVector<std::pair<GlobalVariable *, GlobalVariable *>>
-      MaybeExtInitializedGlobals;
-
-  IGInstrumentationModeTy Mode;
-  Type *VoidTy, *FloatTy, *DoubleTy;
-  IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
-  PointerType *PtrTy;
-  LLVMContext *Ctx;
-
-  AnalysisManager<Module> &MAM;
-
-  void initializeCallbacks(Module &M);
-
-private:
-  // These arrays is indexed by AccessIsWrite
-  DenseMap<std::pair<int, Type *>, FunctionCallee> InputGenMemoryAccessCallback;
-  DenseMap<Type *, FunctionCallee> ValueGenCallback;
-
-  FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
-};
-
-class ModuleInputGenInstrumenter {
-public:
-  ModuleInputGenInstrumenter(Module &M, AnalysisManager<Module> &AM,
-                             IGInstrumentationModeTy Mode)
-      : IGI(M, AM, Mode) {
-    TargetTriple = Triple(M.getTargetTriple());
-  }
-
-  bool instrumentModule(Module &);
-  bool instrumentModuleForFunction(Module &, Function &);
-
-private:
-  Triple TargetTriple;
-  Function *InputGenCtorFunction = nullptr;
-  InputGenInstrumenter IGI;
-};
-
 } // end anonymous namespace
 
 InputGenerationInstrumentPass::InputGenerationInstrumentPass() = default;
 
-namespace llvm {
-bool inputGenerationInstrumentModuleForFunction(Function &F,
-                                                ModuleAnalysisManager &MAM,
-                                                IGInstrumentationModeTy Mode) {
-  Module &M = *F.getParent();
-  ModuleInputGenInstrumenter Profiler(M, MAM, Mode);
-  return Profiler.instrumentModuleForFunction(M, F);
-}
-} // namespace llvm
-
 PreservedAnalyses
 InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &MAM) {
   ModuleInputGenInstrumenter Profiler(M, MAM, InstrumentationMode);
-  if (Profiler.instrumentModule(M))
+  if (Profiler.instrumentClEntryPoint(M))
     return PreservedAnalyses::none();
   return PreservedAnalyses::all();
 }
@@ -418,7 +314,7 @@ void createProfileFileNameVar(Module &M, Triple &TT,
   }
 }
 
-bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
+bool ModuleInputGenInstrumenter::instrumentClEntryPoint(Module &M) {
   Function *EntryPoint = M.getFunction(ClEntryPoint);
   if (!EntryPoint) {
     int No;
@@ -437,10 +333,122 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
   return instrumentModuleForFunction(M, *EntryPoint);
 }
 
+bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
+
+  switch (IGI.Mode) {
+  case IG_Run:
+  case IG_Generate:
+    if (auto *OldMain = M.getFunction("main"))
+      OldMain->setName("__input_gen_user_main");
+    break;
+  case IG_Record:
+    break;
+  }
+
+  IGI.initializeCallbacks(M);
+  IGI.provideGlobals(M);
+
+  // instrumentFunction(F);
+  for (auto &Fn : M)
+    if (!Fn.isDeclaration())
+      IGI.instrumentFunction(Fn);
+
+  if (IGI.Mode == IG_Generate) {
+    auto Prefix = getCallbackPrefix(IGI.Mode);
+
+    // Create a module constructor.
+    std::string InputGenVersion = std::to_string(LLVM_INPUT_GEN_VERSION);
+    std::string VersionCheckName =
+        ClInsertVersionCheck
+            ? (Prefix + VersionCheckNamePrefix + InputGenVersion)
+            : "";
+    std::tie(InputGenCtorFunction, std::ignore) =
+        createSanitizerCtorAndInitFunctions(M, Prefix + ModuleCtorName,
+                                            Prefix + InitName,
+                                            /*InitArgTypes=*/{},
+                                            /*InitArgs=*/{}, VersionCheckName);
+
+    appendToGlobalCtors(M, InputGenCtorFunction, /*Priority=*/1);
+
+    FunctionType *FnTy = FunctionType::get(IGI.VoidTy, false);
+    auto *DeinitFn = Function::Create(FnTy, GlobalValue::InternalLinkage,
+                                      Prefix + ModuleDtorName, M);
+    auto *EntryBB = BasicBlock::Create(*IGI.Ctx, "entry", DeinitFn);
+    FunctionCallee DeinitBody = M.getOrInsertFunction(
+        Prefix + DeinitName, FunctionType::get(IGI.VoidTy, false));
+    CallInst::Create(DeinitBody, "", EntryBB);
+    ReturnInst::Create(*IGI.Ctx, EntryBB);
+
+    appendToGlobalDtors(M, DeinitFn, /*Priority=*/1000);
+
+    ::createProfileFileNameVar(M, TargetTriple, IGI.Mode);
+  }
+
+  IGI.stubDeclarations(M, *TLI);
+
+  auto *GlobalInitF =
+      Function::Create(FunctionType::get(IGI.VoidTy, /*isVarArg=*/false),
+                       GlobalValue::ExternalLinkage, "__input_gen_init", &M);
+  auto *EntryBB =
+      BasicBlock::Create(GlobalInitF->getContext(), "entry", GlobalInitF);
+  IRBuilder<> IRB(EntryBB);
+  IGI.createGlobalCalls(M, IRB);
+  IRB.CreateRetVoid();
+
+  return true;
+}
+
+bool ModuleInputGenInstrumenter::instrumentEntryPoint(Module &M,
+                                                      Function &EntryPoint,
+                                                      bool UniqName) {
+  EntryPoint.setLinkage(GlobalValue::ExternalLinkage);
+
+  switch (IGI.Mode) {
+  case IG_Record:
+    IGI.createRecordingEntryPoint(EntryPoint);
+    break;
+  case IG_Generate:
+    IGI.createGenerationEntryPoint(EntryPoint, UniqName);
+    break;
+  case IG_Run:
+    IGI.createRunEntryPoint(EntryPoint, UniqName);
+    break;
+  }
+
+  return true;
+}
+
+std::unique_ptr<Module>
+ModuleInputGenInstrumenter::generateEntryPointModule(Module &M,
+                                                     Function &EntryPoint) {
+  auto NewM = std::make_unique<Module>("entry_point_module", M.getContext());
+  NewM->setTargetTriple(M.getTargetTriple());
+  NewM->setDataLayout(M.getDataLayout());
+
+  Function *EntryF = Function::Create(EntryPoint.getFunctionType(),
+                                      GlobalValue::ExternalLinkage,
+                                      EntryPoint.getName(), &*NewM);
+
+  switch (IGI.Mode) {
+  case IG_Record:
+    IGI.createRecordingEntryPoint(*EntryF);
+    break;
+  case IG_Generate:
+    IGI.createGenerationEntryPoint(*EntryF, true);
+    break;
+  case IG_Run:
+    IGI.createRunEntryPoint(*EntryF, true);
+    break;
+  }
+
+  return NewM;
+}
+
 bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
     Module &M, Function &EntryPoint) {
   if (EntryPoint.isDeclaration()) {
-    errs() << "Entry point is declaration, used \"" << ClEntryPoint << "\".\n";
+    errs() << "Entry point is declaration, used \"" << EntryPoint.getName()
+           << "\".\n";
     return false;
   }
 
@@ -458,14 +466,14 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
   switch (IGI.Mode) {
   case IG_Record:
     IGI.createRecordingEntryPoint(EntryPoint);
-    IGI.instrumentEntryPoint(EntryPoint);
+    IGI.instrumentModuleForEntryPoint(EntryPoint);
     break;
   case IG_Generate:
-    IGI.createGenerationEntryPoint(EntryPoint);
-    IGI.instrumentEntryPoint(EntryPoint);
+    IGI.createGenerationEntryPoint(EntryPoint, false);
+    IGI.instrumentModuleForEntryPoint(EntryPoint);
     break;
   case IG_Run:
-    IGI.createRunEntryPoint(EntryPoint);
+    IGI.createRunEntryPoint(EntryPoint, false);
     return true;
   }
 
@@ -495,7 +503,7 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
 
   appendToGlobalDtors(M, DeinitFn, /*Priority=*/1000);
 
-  createProfileFileNameVar(M, TargetTriple, IGI.Mode);
+  ::createProfileFileNameVar(M, TargetTriple, IGI.Mode);
 
   return true;
 }
@@ -510,12 +518,12 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       InterestingMemoryAccess::KindTy K = InterestingMemoryAccess::KindTy(I);
       const std::string KindStr = InterestingMemoryAccess::kindAsStr(K);
       InputGenMemoryAccessCallback[{K, Ty}] =
-          M.getOrInsertFunction(Prefix + KindStr + "_" + getTypeName(Ty),
+          M.getOrInsertFunction(Prefix + KindStr + "_" + ::getTypeName(Ty),
                                 VoidTy, PtrTy, Int64Ty, Int32Ty, PtrTy);
     }
 
     ValueGenCallback[Ty] =
-        M.getOrInsertFunction(Prefix + "get_" + getTypeName(Ty), Ty);
+        M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty);
   }
 
   InputGenMemmove =
@@ -603,8 +611,7 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
   }
 }
 
-void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
-
+SetVector<Function *> InputGenInstrumenter::pruneModule(Function &F) {
   Module &M = *F.getParent();
   SetVector<Function *> Functions;
   Functions.insert(&F);
@@ -647,7 +654,13 @@ void InputGenInstrumenter::instrumentEntryPoint(Function &F) {
 
   A.run();
 
-  // instrumentFunction(F);
+  return Functions;
+}
+
+void InputGenInstrumenter::instrumentModuleForEntryPoint(Function &F) {
+
+  auto Functions = pruneModule(F);
+
   for (auto *Fn : Functions)
     if (!Fn->isDeclaration())
       instrumentFunction(*Fn);
@@ -664,7 +677,7 @@ void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
 
   for (auto &Arg : F.args()) {
     FunctionCallee ArgPtrFn = M.getOrInsertFunction(
-        RecordingCallbackPrefix + "arg_" + getTypeName(Arg.getType()),
+        RecordingCallbackPrefix + "arg_" + ::getTypeName(Arg.getType()),
         FunctionType::get(Arg.getType(), {Arg.getType()}, false));
     IRB.CreateCall(ArgPtrFn, {&Arg});
   }
@@ -697,50 +710,59 @@ void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
   }
 }
 
-void InputGenInstrumenter::createGenerationEntryPoint(Function &F) {
+void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
+                                                      bool UniqName) {
   Module &M = *F.getParent();
-  if (auto *OldMain = M.getFunction("main"))
-    OldMain->setName("__user_main");
 
+  std::string EntryPointName = getCallbackPrefix(Mode) + "entry";
+  if (UniqName)
+    EntryPointName += F.getName();
   FunctionType *MainTy = FunctionType::get(Int32Ty, {Int32Ty, PtrTy}, false);
-  auto *MainFn = Function::Create(MainTy, GlobalValue::ExternalLinkage,
-                                  getCallbackPrefix(Mode) + "entry", M);
-  auto *EntryBB = BasicBlock::Create(*Ctx, "entry", MainFn);
+  auto *EntryPoint =
+      Function::Create(MainTy, GlobalValue::ExternalLinkage, EntryPointName, M);
+  auto *EntryBB = BasicBlock::Create(*Ctx, "entry", EntryPoint);
 
   auto *RI =
       ReturnInst::Create(*Ctx, ConstantInt::getNullValue(Int32Ty), EntryBB);
   IRBuilder<> IRB(RI);
-  IRB.SetCurrentDebugLocation(F.getEntryBlock().getTerminator()->getDebugLoc());
+  if (!F.isDeclaration())
+    IRB.SetCurrentDebugLocation(
+        F.getEntryBlock().getTerminator()->getDebugLoc());
 
-  createGlobalCalls(M, IRB);
+  Function *InitF = M.getFunction("__input_gen_init");
+  IRB.CreateCall(FunctionCallee(InitF->getFunctionType(), InitF), {});
 
   SmallVector<Value *> Args;
   for (auto &Arg : F.args()) {
     FunctionCallee ArgPtrFn = M.getOrInsertFunction(
-        InputGenCallbackPrefix + "arg_" + getTypeName(Arg.getType()),
+        InputGenCallbackPrefix + "arg_" + ::getTypeName(Arg.getType()),
         FunctionType::get(Arg.getType(), false));
     Args.push_back(IRB.CreateCall(ArgPtrFn, {}));
   }
   IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
 }
 
-void InputGenInstrumenter::createRunEntryPoint(Function &F) {
+void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
   Module &M = *F.getParent();
-  if (auto *OldMain = M.getFunction("main"))
-    OldMain->setName("__user_main");
 
+  std::string EntryPointName = getCallbackPrefix(Mode) + "entry";
+  if (UniqName)
+    EntryPointName += F.getName();
   FunctionType *MainTy = FunctionType::get(VoidTy, {PtrTy}, false);
-  auto *MainFn = Function::Create(MainTy, GlobalValue::ExternalLinkage,
-                                  getCallbackPrefix(Mode) + "entry", M);
-  auto *EntryBB = BasicBlock::Create(*Ctx, "entry", MainFn);
+  auto *EntryPoint =
+      Function::Create(MainTy, GlobalValue::ExternalLinkage, EntryPointName, M);
+  auto *EntryBB = BasicBlock::Create(*Ctx, "entry", EntryPoint);
 
   auto *RI = ReturnInst::Create(*Ctx, EntryBB);
   IRBuilder<> IRB(RI);
-  IRB.SetCurrentDebugLocation(F.getEntryBlock().getTerminator()->getDebugLoc());
+  if (!F.isDeclaration())
+    IRB.SetCurrentDebugLocation(
+        F.getEntryBlock().getTerminator()->getDebugLoc());
 
-  createGlobalCalls(M, IRB);
+  Function *InitF = M.getFunction("__input_gen_init");
+  IRB.CreateCall(FunctionCallee(InitF->getFunctionType(), InitF), {});
 
-  Argument *ArgsPtr = MainFn->getArg(0);
+  Argument *ArgsPtr = EntryPoint->getArg(0);
   unsigned Idx = 0;
   SmallVector<Value *> Args;
   for (auto &Arg : F.args()) {
