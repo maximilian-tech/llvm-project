@@ -10,6 +10,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
@@ -156,64 +157,73 @@ public:
     return ClonedModule;
   }
 
-  void genForAllFunctions() {
-    // TODO Use proper path concat function
-    std::string Functions = OutputDir + "/" + "available_functions";
-    auto Fs = std::ofstream(Functions);
+  bool shouldGen(Function &F) { return !F.isDeclaration(); }
 
-    // TODO Maybe we can parallelize this loop
+  void genAllFunctionsForRuntime(std::string RuntimeName,
+                                 IGInstrumentationModeTy Mode) {
+
     for (auto &F : M.getFunctionList()) {
-      if (F.isDeclaration())
+      if (!shouldGen(F))
         continue;
 
-      Fs << F.getName().str() << std::endl;
-
-      auto HandleModule = [&](std::string ModuleName, std::string RuntimeName,
-                              std::string ExecutableName,
-                              IGInstrumentationModeTy Mode) {
-
-        llvm::outs() << "Handling function @" << F.getName() << "\n";
-        llvm::outs() << "Instrumenting...\n";
-
-        auto GenModule = getInstrumentedModule(M, F, Mode);
-        if (!GenModule) {
-          llvm::outs() << "Instrumenting failed\n";
-          return;
+      std::string FuncName = F.getName().str();
+      std::string ModeStr = [&]() {
+        switch (Mode) {
+        case llvm::IG_Generate:
+          return "generate";
+        case llvm::IG_Run:
+          return "run";
+        case llvm::IG_Record:
+          llvm_unreachable("Unsupported mode");
         }
-        llvm::outs() << "Instrumenting succeeded\n";
+        llvm_unreachable("Unknown mode");
+      }();
 
-        llvm::outs() << "Generating input module...\n";
+      std::string ModuleFileName =
+          OutputDir + "/" + "input-gen." + FuncName + "." + ModeStr + ".bc";
+      std::string ExecutableFileName =
+          OutputDir + "/" + "input-gen." + FuncName + "." + ModeStr + ".a.out";
 
-        if (!writeModuleToFile(*GenModule, ModuleName)) {
-          llvm::outs() << "Writing module to file failed\n";
-          exit(1);
-        }
+      llvm::outs() << "Handling function @" << F.getName() << "\n";
+      llvm::outs() << "Instrumenting...\n";
 
-        // TODO Use proper path concat function
-        if (CompileInputGenExecutables) {
-          if (compileModule(ModuleName, RuntimeName, ExecutableName)) {
-            llvm::outs() << "Compiling executable succeeded\n";
-          } else {
-            llvm::outs() << "Compiling executable failed\n";
-            return;
-          }
-        }
-      };
+      auto InstrumentedM = getInstrumentedModule(M, F, Mode);
+      if (!InstrumentedM) {
+        llvm::outs() << "Instrumenting failed\n";
+        return;
+      }
+      llvm::outs() << "Instrumenting succeeded\n";
 
-      std::string Name = F.getName().str();
+      llvm::outs() << "Generating input module...\n";
+
+      if (!writeModuleToFile(*InstrumentedM, ModuleFileName)) {
+        llvm::outs() << "Writing module to file failed\n";
+        exit(1);
+      }
 
       // TODO Use proper path concat function
-      std::string GenModuleName =
-          OutputDir + "/" + "input-gen." + Name + ".generate.bc";
-      std::string GenExecutableName =
-          OutputDir + "/" + "input-gen." + Name + ".generate.a.out";
-      std::string RunModuleName =
-          OutputDir + "/" + "input-gen." + Name + ".run.bc";
-      std::string RunExecutableName =
-          OutputDir + "/" + "input-gen." + Name + ".run.a.out";
-      HandleModule(GenModuleName, GenRuntime, GenExecutableName, IG_Generate);
-      HandleModule(RunModuleName, RunRuntime, RunExecutableName, IG_Run);
+      if (CompileInputGenExecutables) {
+        if (compileModule(ModuleFileName, RuntimeName, ExecutableFileName)) {
+          llvm::outs() << "Compiling executable succeeded\n";
+        } else {
+          llvm::outs() << "Compiling executable failed\n";
+          return;
+        }
+      }
     }
+  }
+
+  void dumpFunctions() {
+    std::string Functions = OutputDir + "/" + "available_functions";
+    auto Fs = std::ofstream(Functions);
+    for (auto &F : M.getFunctionList())
+      if (shouldGen(F))
+        Fs << F.getName().str() << std::endl;
+  }
+
+  void genAllFunctionForAllRuntimes() {
+    genAllFunctionsForRuntime(GenRuntime, IG_Generate);
+    genAllFunctionsForRuntime(RunRuntime, IG_Run);
   }
 
   bool writeModuleToFile(Module &M, std::string FileName) {
@@ -281,8 +291,8 @@ int main(int argc, char **argv) {
   InputGenOrchestration IGO(*M);
 
   IGO.init(argc, argv);
-
-  IGO.genForAllFunctions();
+  IGO.dumpFunctions();
+  IGO.genAllFunctionForAllRuntimes();
 
   return 0;
 }
