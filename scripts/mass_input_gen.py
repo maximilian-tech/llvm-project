@@ -84,7 +84,7 @@ if __name__ == '__main__':
     ds = ds.skip(args.start)
     with multiprocessing.Pool(args.num_procs) as pool:
         tasks = list(zip(range(args.start, args.end), ds))
-        stats = pool.imap(handle_single_module, tasks, chunksize=2)
+        stats = pool.imap(handle_single_module, tasks, chunksize=1)
         empty = input_gen_module.InputGenModule().get_empty_statistics()
         stats = list(stats)
         agg_stats = functools.reduce(
