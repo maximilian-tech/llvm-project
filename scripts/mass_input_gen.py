@@ -86,7 +86,10 @@ if __name__ == '__main__':
         tasks = list(zip(range(args.start, args.end), ds))
         stats = pool.imap(handle_single_module, tasks, chunksize=2)
         empty = input_gen_module.InputGenModule().get_empty_statistics()
+        stats = list(stats)
         agg_stats = functools.reduce(
-            input_gen_module.InputGenModule().add_statistics, list(stats), empty)
+            input_gen_module.InputGenModule().add_statistics, stats, empty)
+
+        print('Module statistics: {}'.format(list(zip(range(args.start, args.end), stats))))
 
         print('Statistics: {}'.format(agg_stats))
