@@ -506,7 +506,7 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
                    Int64Ty, PtrTy,  FloatTy, DoubleTy};
   auto Prefix = getCallbackPrefix(Mode);
   for (Type *Ty : Types) {
-    for (int I = 0; I < InterestingMemoryAccess::Last; ++I) {
+    for (int I = 0; I <= InterestingMemoryAccess::Last; ++I) {
       InterestingMemoryAccess::KindTy K = InterestingMemoryAccess::KindTy(I);
       const std::string KindStr = InterestingMemoryAccess::kindAsStr(K);
       InputGenMemoryAccessCallback[{K, Ty}] =

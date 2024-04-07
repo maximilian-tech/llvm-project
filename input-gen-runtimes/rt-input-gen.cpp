@@ -446,6 +446,10 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
                                void *Base) {                                   \
     getInputGenRT().Heap->write<TY>((TY *)Ptr, (TY)Val, Size);                 \
   }                                                                            \
+  void __inputgen_read_write_##NAME(void *Ptr, int64_t Val, int32_t Size,      \
+                                    void *Base) {                              \
+    abort();                                                                   \
+  }                                                                            \
   void __record_read_##NAME(void *Ptr, int64_t Val, int32_t Size,              \
                             void *Base) {                                      \
     getInputGenRT().Heap->read<TY>(Ptr, Base, Size);                           \
@@ -453,6 +457,10 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
   void __record_write_##NAME(void *Ptr, int64_t Val, int32_t Size,             \
                              void *Base) {                                     \
     getInputGenRT().Heap->write<TY>((TY *)Ptr, (TY)Val, Size);                 \
+  }                                                                            \
+  void __record_read_write_##NAME(void *Ptr, int64_t Val, int32_t Size,        \
+                                  void *Base) {                                \
+    abort();                                                                   \
   }
 
 RW(bool, i1)
