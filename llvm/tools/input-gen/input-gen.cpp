@@ -133,6 +133,8 @@ public:
     }
   }
 
+  std::vector<Function *> Functions;
+
   std::unique_ptr<Module> getInstrumentedModule(Module &M, Function &F,
                                                 IGInstrumentationModeTy Mode) {
     ValueToValueMapTy VMap;
@@ -162,9 +164,8 @@ public:
   void genAllFunctionsForRuntime(std::string RuntimeName,
                                  IGInstrumentationModeTy Mode) {
 
-    for (auto &F : M.getFunctionList()) {
-      if (!shouldGen(F))
-        continue;
+    for (size_t It = 0; It < Functions.size(); It++) {
+      Function &F = *Functions[It];
 
       std::string FuncName = F.getName().str();
       std::string ModeStr = [&]() {
@@ -214,11 +215,14 @@ public:
   }
 
   void dumpFunctions() {
-    std::string Functions = OutputDir + "/" + "available_functions";
-    auto Fs = std::ofstream(Functions);
-    for (auto &F : M.getFunctionList())
-      if (shouldGen(F))
+    std::string AvailFuncsFileName = OutputDir + "/" + "available_functions";
+    auto Fs = std::ofstream(AvailFuncsFileName);
+    for (auto &F : M.getFunctionList()) {
+      if (shouldGen(F)) {
         Fs << F.getName().str() << std::endl;
+        Functions.push_back(&F);
+      }
+    }
   }
 
   void genAllFunctionForAllRuntimes() {
