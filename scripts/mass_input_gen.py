@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import ray
 import tempfile
 import subprocess
 import argparse
@@ -8,8 +9,33 @@ import sys
 import multiprocessing
 import functools
 from datasets import load_dataset
+from ray.util.actor_pool import ActorPool
 
 import input_gen_module
+
+@ray.remote(num_cpus=1)
+class ModuleHandler:
+    def __init__(self, dataset, global_outdir, igm_args):
+        self.ds = load_dataset(dataset, split='train', streaming=True)
+        self.global_outdir = global_outdir
+        self.igm_args = igm_args
+    def handle_single_module(self, i):
+        ds_i = self.ds.skip(i)
+        module = list(ds_i.take(1))[0]
+
+        self.igm_args['outdir'] = os.path.join(self.global_outdir, str(i))
+        os.makedirs(self.igm_args['outdir'], exist_ok=True)
+        with open(self.igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
+        #with tempfile.NamedTemporaryFile(dir='/tmp/', prefix='input-gen-input-', suffix='.bc') as module_file:
+            module_file.write(module['content'])
+            module_file.flush()
+            self.igm_args['input_module'] = module_file.name
+
+            igm = input_gen_module.InputGenModule(**self.igm_args)
+            igm.generate_inputs()
+            igm.run_all_inputs()
+
+            return igm.get_statistics()
 
 def precompile_runtimes(args):
     print('Precompiling runtimes... ', end='', flush=True)
@@ -30,7 +56,6 @@ def precompile_runtime(fname):
         return obj
     else:
         return fname
-
 
 def handle_single_module(task):
     (i, module) = task
@@ -64,6 +89,7 @@ if __name__ == '__main__':
     parser.add_argument('--no-precompile-rts',
                         dest='precompile_rts', action='store_false')
     parser.set_defaults(precompile_rts=True)
+    parser.add_argument('--use-ray', action='store_true')
 
     input_gen_module.add_option_args(parser)
 
@@ -72,24 +98,53 @@ if __name__ == '__main__':
     if args.precompile_rts:
         precompile_runtimes(args)
 
-    ds = load_dataset(args.dataset, split='train', streaming=True)
+    if args.use_ray:
 
-    os.makedirs(args.outdir, exist_ok=True)
+        ray.init()
 
-    print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
+        resources = ray.cluster_resources()
+        print("Resources:", ray.cluster_resources())
 
-    global_outdir = args.outdir
-    igm_args = vars(args)
+        if args.num_procs is None:
+            args.num_procs = int(resources['CPU'])
+        else:
+            print("WARNING SETTING NUM PROCS WHEN USING RAY NOT RECOMMENDED")
+        igm_args = vars(args)
+        actors = []
+        global_outdir = args.outdir
+        igm_args = vars(args)
+        for _ in range(args.num_procs):
+            actors.append(ModuleHandler.remote(args.dataset, global_outdir, igm_args))
+        pool = ActorPool(actors)
+        stats = list(pool.map(lambda a, v: a.handle_single_module.remote(v), range(args.start, args.end)))
 
-    ds = ds.skip(args.start)
-    with multiprocessing.Pool(args.num_procs) as pool:
-        tasks = list(zip(range(args.start, args.end), ds))
-        stats = pool.imap(handle_single_module, tasks, chunksize=1)
         empty = input_gen_module.InputGenModule().get_empty_statistics()
-        stats = list(stats)
         agg_stats = functools.reduce(
             input_gen_module.InputGenModule().add_statistics, stats, empty)
 
         print('Module statistics: {}'.format(list(zip(range(args.start, args.end), stats))))
 
         print('Statistics: {}'.format(agg_stats))
+
+    else:
+        ds = load_dataset(args.dataset, split='train', streaming=True)
+
+        os.makedirs(args.outdir, exist_ok=True)
+
+        print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
+
+        global_outdir = args.outdir
+        igm_args = vars(args)
+
+        ds = ds.skip(args.start)
+        with multiprocessing.Pool(args.num_procs) as pool:
+            tasks = list(zip(range(args.start, args.end), ds))
+            stats = pool.imap(handle_single_module, tasks, chunksize=1)
+            empty = input_gen_module.InputGenModule().get_empty_statistics()
+            stats = list(stats)
+            agg_stats = functools.reduce(
+                input_gen_module.InputGenModule().add_statistics, stats, empty)
+
+            print('Module statistics: {}'.format(list(zip(range(args.start, args.end), stats))))
+
+            print('Statistics: {}'.format(agg_stats))
