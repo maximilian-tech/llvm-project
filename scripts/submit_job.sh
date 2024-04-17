@@ -4,7 +4,7 @@ set -e
 set -x
 
 
-NODES=3
+NODES=10
 TIMEOUT=1h
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
