@@ -18,8 +18,7 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
 export NUMEXPR_MAX_THREADS="$(nproc --all)"
 
-# TODO INSTALL INPUT GEN HERE
-. enable.sh "/usr/WS1/$USER/opt/input-gen-release"
+. "$SCRIPT_DIR/enable.sh" "/usr/WS1/$USER/opt/input-gen-release"
 export PATH
 export LD_LIBRARY_PATH
 export LIBRARY_PATH
