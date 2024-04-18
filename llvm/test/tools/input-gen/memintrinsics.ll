@@ -1,4 +1,4 @@
-; RUN: input-gen  --output-dir %T --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.bc --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.bc %s
+; RUN: input-gen  --output-dir %T --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
 ; RUN: %S/run_all.sh %T
 ; ModuleID = 'memintrinsics.c'
 source_filename = "memintrinsics.c"
