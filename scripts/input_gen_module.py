@@ -174,16 +174,11 @@ class InputGenModule:
                         stdout=self.get_stdout(),
                         stderr=self.get_stderr())
 
-                    # TODO we could accidentally kill the input gen while it
-                    # writes the results to the file, find a better way to
-                    # orchestrate this.
+                    # TODO With the current implementation one of the input
+                    # gens timing out would mean we lose some completed ones.
                     #
-                    # TODO also with the current implementation one of the input
-                    # gens timing out would mean we lose even the completed
-                    # ones.
-                    #
-                    # Perhaps multi-process input-gen into a tmp dir and move
-                    # completed inputs into the correct dir only if we succeeded
+                    # We should just move the input-gen loop in here and only do
+                    # one output at a time.
                     out, err = proc.communicate(timeout=self.input_gen_timeout)
 
                     if proc.returncode != 0:
