@@ -14,22 +14,42 @@ def add_option_args(parser):
     # TODO Pass in an object files here so as not to compile the cpp every time
     parser.add_argument('--input-gen-runtime', default='./input-gen-runtimes/rt-input-gen.cpp')
     parser.add_argument('--input-run-runtime', default='./input-gen-runtimes/rt-run.cpp')
+    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--no-verbose', dest='verbose', action='store_false')
+    parser.set_defaults(verbose=False)
 
 class Function:
-    def __init__(self, name):
+    def __init__(self, name, verbose):
         self.name = name
         self.input_gen_executable = None
         self.input_run_executable = None
         self.inputs_dir = None
         self.inputs = []
         self.times = {}
+        self.verbose = verbose
+
+    def get_stderr(self):
+        if self.verbose:
+            return None
+        else:
+            return subprocess.DEVNULL
+
+    def get_stdout(self):
+        if self.verbose:
+            return None
+        else:
+            return subprocess.DEVNULL
 
     def run_all_inputs(self, timeout):
         for input in self.inputs:
             self.run_input(input, timeout)
 
+    def print(self, *args, **kwargs):
+        if self.verbose:
+            print(*args, **kwargs)
+
     def run_input(self, input, timeout):
-        print('Running executables for', self.input_run_executable)
+        self.print('Running executables for', self.input_run_executable)
 
         try:
             start_time = time.time()
@@ -40,32 +60,32 @@ class Function:
                     input,
                     self.name,
                 ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL)
+                stdout=self.get_stdout(),
+                stderr=self.get_stderr())
             out, err = proc.communicate(timeout=timeout)
 
             end_time = time.time()
             elapsed_time = end_time - start_time
 
             if proc.returncode != 0:
-                print('Input run process failed (%i): %s' % (proc.returncode, input))
+                self.print('Input run process failed (%i): %s' % (proc.returncode, input))
             else:
                 if input not in self.times:
                     self.times[input] = []
                 self.times[input].append(elapsed_time)
 
         except subprocess.CalledProcessError as e:
-            print('Input run process failed: %s' % input)
+            self.print('Input run process failed: %s' % input)
         except subprocess.TimeoutExpired as e:
-            print("Input run timed out! Terminating... %s" % input)
+            self.print("Input run timed out! Terminating... %s" % input)
             proc.terminate()
             try:
                 proc.communicate(timeout=1)
             except subprocess.TimeoutExpired as e:
-                print("Termination timed out! Killing... %s" % input)
+                self.print("Termination timed out! Killing... %s" % input)
                 proc.kill()
                 proc.communicate()
-                print("Killed.")
+                self.print("Killed.")
 
 class InputGenModule:
     def __init__(self, **kwargs):
@@ -73,11 +93,27 @@ class InputGenModule:
             setattr(self, k, v)
         self.functions = []
 
+    def print(self, *args, **kwargs):
+        if self.verbose:
+            print(*args, **kwargs)
+
+    def get_stderr(self):
+        if self.verbose:
+            return None
+        else:
+            return subprocess.DEVNULL
+
+    def get_stdout(self):
+        if self.verbose:
+            return None
+        else:
+            return subprocess.DEVNULL
+
     def generate_inputs(self):
 
         os.makedirs(self.outdir, exist_ok=True)
 
-        print('Generating inputgen executables for', self.input_module, 'in', self.outdir)
+        self.print('Generating inputgen executables for', self.input_module, 'in', self.outdir)
 
         try:
 
@@ -89,20 +125,23 @@ class InputGenModule:
                 self.input_module,
                 '--compile-input-gen-executables'
             ]
-            subprocess.run(igargs, check=True)
+            subprocess.run(igargs,
+                           check=True,
+                           stdout=self.get_stdout(),
+                           stderr=self.get_stderr())
         except Exception:
-            print('Failed to instrument')
+            self.print('Failed to instrument')
 
         available_functions_file_name = os.path.join(self.outdir, 'available_functions')
         try:
             available_functions_file = open(available_functions_file_name, 'r')
         except IOError as e:
-            print("Could not open available functions file:", e)
-            print("input-gen args:", " ".join(igargs))
+            self.print("Could not open available functions file:", e)
+            self.print("input-gen args:", " ".join(igargs))
             raise(e)
         else:
             for fname in available_functions_file.read().splitlines():
-                func = Function(fname)
+                func = Function(fname, self.verbose)
                 self.functions.append(func)
 
                 input_gen_executable = os.path.join(
@@ -120,7 +159,7 @@ class InputGenModule:
                 func.input_gen_executable = input_gen_executable
                 func.inputs_dir = inputs_dir
 
-                print('Generating inputs for function @{}'.format(fname))
+                self.print('Generating inputs for function @{}'.format(fname))
 
                 try:
                     start = 0
@@ -132,8 +171,8 @@ class InputGenModule:
                             str(start), str(end),
                             fname,
                         ],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL)
+                        stdout=self.get_stdout(),
+                        stderr=self.get_stderr())
 
                     # TODO we could accidentally kill the input gen while it
                     # writes the results to the file, find a better way to
@@ -148,9 +187,9 @@ class InputGenModule:
                     out, err = proc.communicate(timeout=self.input_gen_timeout)
 
                     if proc.returncode != 0:
-                        print('Input gen process failed: @{}'.format(fname))
+                        self.print('Input gen process failed: @{}'.format(fname))
                     else:
-                        print('Input gen process succeeded: @{}'.format(fname))
+                        self.print('Input gen process succeeded: @{}'.format(fname))
                         # Populate the generated inputs
                         func.inputs = [
                             os.path.join(inputs_dir,
@@ -162,17 +201,17 @@ class InputGenModule:
                             assert(os.path.isfile(inpt))
 
                 except subprocess.CalledProcessError as e:
-                    print('Input gen process failed: @{}'.format(fname))
+                    self.print('Input gen process failed: @{}'.format(fname))
                 except subprocess.TimeoutExpired as e:
-                    print('Input gen timed out! Terminating...: @{}'.format(fname))
+                    self.print('Input gen timed out! Terminating...: @{}'.format(fname))
                     proc.terminate()
                     try:
                         proc.communicate(timeout=1)
                     except subprocess.TimeoutExpired as e:
-                        print("Termination timed out! Killing...")
+                        self.print("Termination timed out! Killing...")
                         proc.kill()
                         proc.communicate()
-                        print("Killed.")
+                        self.print("Killed.")
             available_functions_file.close()
 
 

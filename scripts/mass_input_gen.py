@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import ray
-import tempfile
 import subprocess
 import argparse
 import os
@@ -15,18 +14,19 @@ import input_gen_module
 
 @ray.remote(num_cpus=1)
 class ModuleHandler:
-    def __init__(self, dataset, global_outdir, igm_args):
+    def __init__(self, dataset, global_outdir, igm_args, verbose):
         self.ds = load_dataset(dataset, split='train', streaming=True)
         self.global_outdir = global_outdir
         self.igm_args = igm_args
+        self.verbose = verbose
     def handle_single_module(self, i):
+        print("Module #{}".format(i))
         ds_i = self.ds.skip(i)
         module = list(ds_i.take(1))[0]
 
         self.igm_args['outdir'] = os.path.join(self.global_outdir, str(i))
         os.makedirs(self.igm_args['outdir'], exist_ok=True)
         with open(self.igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
-        #with tempfile.NamedTemporaryFile(dir='/tmp/', prefix='input-gen-input-', suffix='.bc') as module_file:
             module_file.write(module['content'])
             module_file.flush()
             self.igm_args['input_module'] = module_file.name
@@ -63,7 +63,6 @@ def handle_single_module(task):
     igm_args['outdir'] = os.path.join(global_outdir, str(i))
     os.makedirs(igm_args['outdir'], exist_ok=True)
     with open(igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
-    #with tempfile.NamedTemporaryFile(dir='/tmp/', prefix='input-gen-input-', suffix='.bc') as module_file:
         module_file.write(module['content'])
         module_file.flush()
         igm_args['input_module'] = module_file.name
@@ -114,7 +113,7 @@ if __name__ == '__main__':
         global_outdir = args.outdir
         igm_args = vars(args)
         for _ in range(args.num_procs):
-            actors.append(ModuleHandler.remote(args.dataset, global_outdir, igm_args))
+            actors.append(ModuleHandler.remote(args.dataset, global_outdir, igm_args, args.verbose))
         pool = ActorPool(actors)
         stats = list(pool.map(lambda a, v: a.handle_single_module.remote(v), range(args.start, args.end)))
 
