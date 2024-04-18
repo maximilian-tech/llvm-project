@@ -270,6 +270,8 @@ public:
         Functions.push_back(&F);
       }
     }
+    Fs.flush();
+    Fs.close();
   }
 
   void genFunctionForAllRuntimes(std::string FunctionName) {

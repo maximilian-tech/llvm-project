@@ -71,6 +71,7 @@ class InputGenModule:
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
+        self.functions = []
 
     def generate_inputs(self):
 
@@ -79,21 +80,27 @@ class InputGenModule:
         print('Generating inputgen executables for', self.input_module, 'in', self.outdir)
 
         try:
-            subprocess.run([
+
+            igargs = [
                 'input-gen',
                 '--input-gen-runtime', self.input_gen_runtime,
                 '--input-run-runtime', self.input_run_runtime,
                 '--output-dir', self.outdir,
                 self.input_module,
-                '--compile-input-gen-executables',
-            ], check=True)
+                '--compile-input-gen-executables'
+            ]
+            subprocess.run(igargs, check=True)
         except Exception:
             print('Failed to instrument')
 
         available_functions_file_name = os.path.join(self.outdir, 'available_functions')
-        with open(available_functions_file_name, 'r') as available_functions_file:
-            self.functions = []
-
+        try:
+            available_functions_file = open(available_functions_file_name, 'r')
+        except IOError as e:
+            print("Could not open available functions file:", e)
+            print("input-gen args:", " ".join(igargs))
+            raise(e)
+        else:
             for fname in available_functions_file.read().splitlines():
                 func = Function(fname)
                 self.functions.append(func)
@@ -166,6 +173,8 @@ class InputGenModule:
                         proc.kill()
                         proc.communicate()
                         print("Killed.")
+            available_functions_file.close()
+
 
         available_functions_pickle_file_name = os.path.join(self.outdir, 'available_functions.json')
         with open(available_functions_pickle_file_name, 'w') as available_functions_pickle_file:
