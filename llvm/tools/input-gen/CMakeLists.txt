@@ -7,7 +7,7 @@ set(LLVM_LINK_COMPONENTS
   Passes
   Analysis
   TransformUtils
-  TransformUtils
+  TargetParser
   )
 
 add_llvm_tool(input-gen
