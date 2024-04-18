@@ -140,9 +140,9 @@ public:
 
   bool shouldGen(Function &F) { return !F.isDeclaration(); }
 
-  void genFunctionsForRuntime(std::string RuntimeName,
-                              IGInstrumentationModeTy Mode,
-                              Function &EntryPoint) {
+  void genFunctionForRuntime(std::string RuntimeName,
+                             IGInstrumentationModeTy Mode,
+                             Function &EntryPoint) {
 
     ValueToValueMapTy VMap;
     auto InstrM = CloneModule(M, VMap);
@@ -278,8 +278,8 @@ public:
       errs() << "No entry point " << FunctionName << " found.\n";
       exit(1);
     }
-    genFunctionsForRuntime(ClGenRuntime, IG_Generate, *EntryPoint);
-    genFunctionsForRuntime(ClRunRuntime, IG_Run, *EntryPoint);
+    genFunctionForRuntime(ClGenRuntime, IG_Generate, *EntryPoint);
+    genFunctionForRuntime(ClRunRuntime, IG_Run, *EntryPoint);
   }
 
   void genAllFunctionForAllRuntimes() {
