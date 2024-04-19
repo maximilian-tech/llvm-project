@@ -56,7 +56,7 @@ struct InterestingMemoryAccess {
   Value *V = nullptr;
   Value *MaybeMask = nullptr;
 
-  enum KindTy { WRITE, READ, READ_THEN_WRITE, Last = READ_THEN_WRITE } Kind;
+  enum KindTy { READ, WRITE, READ_THEN_WRITE, Last = READ_THEN_WRITE } Kind;
 
   static std::string kindAsStr(KindTy K) {
     switch (K) {
@@ -127,8 +127,7 @@ public:
   void initializeCallbacks(Module &M);
 
 private:
-  // These arrays is indexed by AccessIsWrite
-  DenseMap<std::pair<int, Type *>, FunctionCallee> InputGenMemoryAccessCallback;
+  DenseMap<Type *, FunctionCallee> InputGenMemoryAccessCallback;
   DenseMap<Type *, FunctionCallee> ValueGenCallback;
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;

@@ -271,7 +271,8 @@ void InputGenInstrumenter::instrumentAddress(
                : ConstantInt::getNullValue(Int64Ty),
       ConstantInt::get(Int32Ty, AllocSize),
       Objects.size() == 1 ? const_cast<Value *>(Objects[0])
-                          : getUnderlyingObject(Access.Addr, /*MaxLookup=*/12)};
+                          : getUnderlyingObject(Access.Addr, /*MaxLookup=*/12),
+      ConstantInt::get(Int32Ty, Access.Kind)};
   if (isa<AllocaInst>(Args[3]))
     return;
   if (isa<GlobalVariable>(Args[3]))
@@ -280,7 +281,7 @@ void InputGenInstrumenter::instrumentAddress(
     if (Arg->onlyReadsMemory())
       return;
 
-  auto Fn = InputGenMemoryAccessCallback[{Access.Kind, Access.AccessTy}];
+  auto Fn = InputGenMemoryAccessCallback[Access.AccessTy];
   assert(Fn.getCallee());
   IRB.CreateCall(Fn, Args);
 }
@@ -477,18 +478,14 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
 
 void InputGenInstrumenter::initializeCallbacks(Module &M) {
 
+  auto Prefix = getCallbackPrefix(Mode);
+
   Type *Types[] = {Int1Ty,  Int8Ty, Int16Ty, Int32Ty,
                    Int64Ty, PtrTy,  FloatTy, DoubleTy};
-  auto Prefix = getCallbackPrefix(Mode);
   for (Type *Ty : Types) {
-    for (int I = 0; I <= InterestingMemoryAccess::Last; ++I) {
-      InterestingMemoryAccess::KindTy K = InterestingMemoryAccess::KindTy(I);
-      const std::string KindStr = InterestingMemoryAccess::kindAsStr(K);
-      InputGenMemoryAccessCallback[{K, Ty}] =
-          M.getOrInsertFunction(Prefix + KindStr + "_" + ::getTypeName(Ty),
-                                VoidTy, PtrTy, Int64Ty, Int32Ty, PtrTy);
-    }
-
+    InputGenMemoryAccessCallback[Ty] =
+        M.getOrInsertFunction(Prefix + "access_" + ::getTypeName(Ty), VoidTy,
+                              PtrTy, Int64Ty, Int32Ty, PtrTy, Int32Ty);
     ValueGenCallback[Ty] =
         M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty);
   }
