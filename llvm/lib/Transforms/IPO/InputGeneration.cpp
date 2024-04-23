@@ -271,9 +271,6 @@ void InputGenInstrumenter::instrumentAddress(
     return;
   if (isa<GlobalVariable>(Object))
     return;
-  if (auto *Arg = dyn_cast<Argument>(Object))
-    if (Arg->onlyReadsMemory())
-      return;
 
   Value *Args[] = {Access.Addr,
                    Access.V
