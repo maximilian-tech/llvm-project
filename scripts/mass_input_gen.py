@@ -20,7 +20,8 @@ class ModuleHandler:
         self.igm_args = igm_args
         self.verbose = verbose
     def handle_single_module(self, i):
-        print("Module #{}".format(i))
+        if i % 500 == 0:
+            print("Module #{}".format(i))
         ds_i = self.ds.skip(i)
         module = list(ds_i.take(1))[0]
 
