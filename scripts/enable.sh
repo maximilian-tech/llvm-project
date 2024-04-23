@@ -17,4 +17,4 @@ if [ "$FAIL" == "0" ]; then
 	LIBRARY_PATH="$(readlink -f "$1")/lib/:$LIBRARY_PATH"
 fi
 
-exit $FAIL
+return $FAIL
