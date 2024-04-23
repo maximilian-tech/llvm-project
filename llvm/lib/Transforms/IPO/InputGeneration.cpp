@@ -263,24 +263,26 @@ void InputGenInstrumenter::instrumentAddress(
   getUnderlyingObjects(Access.Addr, Objects, /*LI=*/nullptr,
                        /*MaxLookup=*/12);
 
-  Value *Args[] = {
-      Access.Addr,
-      Access.V ? (Access.AccessTy->isIntOrIntVectorTy()
-                      ? IRB.CreateZExtOrTrunc(Access.V, Int64Ty)
-                      : IRB.CreateBitOrPointerCast(Access.V, Int64Ty))
-               : ConstantInt::getNullValue(Int64Ty),
-      ConstantInt::get(Int32Ty, AllocSize),
-      Objects.size() == 1 ? const_cast<Value *>(Objects[0])
-                          : getUnderlyingObject(Access.Addr, /*MaxLookup=*/12),
-      ConstantInt::get(Int32Ty, Access.Kind)};
-  if (isa<AllocaInst>(Args[3]))
+  Value *Object = Objects.size() == 1
+                      ? const_cast<Value *>(Objects[0])
+                      : getUnderlyingObject(Access.Addr, /*MaxLookup=*/12);
+
+  if (isa<AllocaInst>(Object))
     return;
-  if (isa<GlobalVariable>(Args[3]))
+  if (isa<GlobalVariable>(Object))
     return;
-  if (auto *Arg = dyn_cast<Argument>(Args[3]))
+  if (auto *Arg = dyn_cast<Argument>(Object))
     if (Arg->onlyReadsMemory())
       return;
 
+  Value *Args[] = {Access.Addr,
+                   Access.V
+                       ? (Access.AccessTy->isIntOrIntVectorTy()
+                              ? IRB.CreateZExtOrTrunc(Access.V, Int64Ty)
+                              : IRB.CreateBitOrPointerCast(Access.V, Int64Ty))
+                       : ConstantInt::getNullValue(Int64Ty),
+                   ConstantInt::get(Int32Ty, AllocSize), Object,
+                   ConstantInt::get(Int32Ty, Access.Kind)};
   auto Fn = InputGenMemoryAccessCallback[Access.AccessTy];
   assert(Fn.getCallee());
   IRB.CreateCall(Fn, Args);
