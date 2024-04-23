@@ -1,8 +1,8 @@
-; RUN: input-gen  --output-dir %T --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
+; RUN: input-gen --verify --output-dir %T --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
 ; RUN: %S/run_all.sh %T
 ;
 ; RUN: mkdir -p %T/function-wise/
-; RUN: input-gen  --output-dir %T/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function foo
+; RUN: input-gen --verify --output-dir %T/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function foo
 ; RUN: %T/function-wise/input-gen.function.foo.generate.a.out %T/function-wise/ 2 4
 ; RUN: %T/function-wise/input-gen.function.foo.run.a.out %T/function-wise/input-gen.function.foo.generate.a.out.input.2.bin
 ; RUN: %T/function-wise/input-gen.function.foo.run.a.out %T/function-wise/input-gen.function.foo.generate.a.out.input.3.bin

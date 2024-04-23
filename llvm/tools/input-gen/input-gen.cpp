@@ -6,6 +6,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
@@ -53,6 +54,8 @@ static cl::opt<std::string> ClInputFilename(cl::Positional, cl::init("-"),
 static cl::opt<bool>
     ClCompileInputGenExecutables("compile-input-gen-executables",
                                  cl::cat(InputGenCategory));
+
+static cl::opt<bool> ClVerify("verify", cl::cat(InputGenCategory));
 
 static cl::opt<std::string> ClFunction("function", cl::cat(InputGenCategory));
 
@@ -290,6 +293,9 @@ public:
   }
 
   bool writeModuleToFile(Module &M, std::string FileName) {
+    if (ClVerify && verifyModule(M, &errs()))
+      return false;
+
     int FD;
     std::error_code EC = sys::fs::openFileForWrite(FileName, FD);
     if (EC) {

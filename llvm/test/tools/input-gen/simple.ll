@@ -1,4 +1,4 @@
-; RUN: input-gen  --output-dir %T --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
+; RUN: input-gen --verify --output-dir %T --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
 ; RUN: %S/run_all.sh %T
 
 define dso_local float @float(ptr noundef %LL) local_unnamed_addr #0 {
