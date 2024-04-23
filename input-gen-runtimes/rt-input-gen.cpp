@@ -451,7 +451,15 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
       getInputGenRT().Heap->read<TY>(Ptr, Base, Size);                         \
       return;                                                                  \
     case 1:                                                                    \
-      getInputGenRT().Heap->write<TY>((TY *)Ptr, (TY)Val, Size);               \
+      TY TyVal;                                                                \
+      if (std::is_same<TY, float>::value) {                                    \
+        TyVal = *reinterpret_cast<TY *>(((int32_t)Val));                       \
+      } else if (std::is_same<TY, float>::value) {                             \
+        TyVal = *reinterpret_cast<TY *>((Val));                                \
+      } else {                                                                 \
+        TyVal = (TY)Val;                                                       \
+      }                                                                        \
+      getInputGenRT().Heap->write<TY>((TY *)Ptr, TyVal, Size);                 \
       return;                                                                  \
     default:                                                                   \
       abort();                                                                 \

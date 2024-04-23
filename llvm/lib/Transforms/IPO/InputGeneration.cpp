@@ -272,7 +272,25 @@ void InputGenInstrumenter::instrumentAddress(
     return;
 
   if (auto *ST = dyn_cast<StructType>(Access.AccessTy)) {
-    llvm_unreachable("Structs unsupported.");
+    for (unsigned It = 0; It < ST->getNumElements(); It++) {
+      Type *ElTy = ST->getElementType(It);
+      int32_t ElAllocSize = DL.getTypeAllocSize(ElTy);
+      auto *GEP = IRB.CreateConstGEP2_64(ElTy, Access.Addr, 0, It);
+      Value *V = nullptr;
+      switch (Access.Kind) {
+      case InterestingMemoryAccess::READ:
+        assert(Access.V == nullptr);
+        break;
+      case InterestingMemoryAccess::WRITE:
+        assert(Access.V != nullptr);
+        V = IRB.CreateExtractValue(Access.V, {It});
+        break;
+      case InterestingMemoryAccess::READ_THEN_WRITE:
+        break;
+      }
+      emitMemoryAccessCallback(IRB, GEP, V, ElTy, ElAllocSize, Access.Kind,
+                               Object);
+    }
   } else if (auto *VT = dyn_cast<VectorType>(Access.AccessTy)) {
     Type *ElTy = VT->getElementType();
     int32_t ElAllocSize = DL.getTypeAllocSize(ElTy);
@@ -287,7 +305,7 @@ void InputGenInstrumenter::instrumentAddress(
           break;
         case InterestingMemoryAccess::WRITE:
           assert(Access.V != nullptr);
-          V = IRB.CreateExtractElement(Access.V, IRB.getInt32(It));
+          V = IRB.CreateExtractElement(Access.V, IRB.getInt64(It));
           break;
         case InterestingMemoryAccess::READ_THEN_WRITE:
           break;
@@ -309,13 +327,17 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
     IRBuilderBase &IRB, Value *Addr, Value *V, Type *AccessTy,
     int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object) {
 
-  Value *Args[] = {Addr,
-                   V ? (AccessTy->isIntOrIntVectorTy()
-                            ? IRB.CreateZExtOrTrunc(V, Int64Ty)
-                            : IRB.CreateBitOrPointerCast(V, Int64Ty))
-                     : ConstantInt::getNullValue(Int64Ty),
-                   ConstantInt::get(Int32Ty, AllocSize), Object,
-                   ConstantInt::get(Int32Ty, Kind)};
+  Value *Args[] = {
+      Addr,
+      V ? (AccessTy->isIntOrIntVectorTy()
+               ? IRB.CreateZExtOrTrunc(V, Int64Ty)
+               : IRB.CreateZExtOrTrunc(
+                     IRB.CreateBitOrPointerCast(
+                         V, IntegerType::get(IRB.getContext(), AllocSize * 8)),
+                     Int64Ty))
+        : ConstantInt::getNullValue(Int64Ty),
+      ConstantInt::get(Int32Ty, AllocSize), Object,
+      ConstantInt::get(Int32Ty, Kind)};
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
   assert(Fn.getCallee());
   IRB.CreateCall(Fn, Args);
@@ -736,7 +758,15 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
   SmallVector<Value *> Args;
   for (auto &Arg : F.args()) {
     if (auto *ST = dyn_cast<StructType>(Arg.getType())) {
-      llvm_unreachable("Structs unsupported.");
+      Value *V = UndefValue::get(ST);
+      for (unsigned It = 0; It < ST->getNumElements(); It++) {
+        Type *ElTy = ST->getElementType(It);
+        FunctionCallee ArgFn = M.getOrInsertFunction(
+            InputGenCallbackPrefix + "arg_" + ::getTypeName(ElTy),
+            FunctionType::get(ElTy, false));
+        V = IRB.CreateInsertValue(V, IRB.CreateCall(ArgFn, {}), {It});
+      }
+      Args.push_back(V);
     } else if (auto *VT = dyn_cast<VectorType>(Arg.getType())) {
       Type *ElTy = VT->getElementType();
       if (!VT->getElementCount().isScalable()) {
@@ -747,7 +777,7 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
             FunctionType::get(ElTy, false));
         for (unsigned It = 0; It < Count; It++) {
           V = IRB.CreateInsertElement(V, IRB.CreateCall(ArgFn, {}),
-                                      IRB.getInt32(It));
+                                      IRB.getInt64(It));
         }
         Args.push_back(V);
       } else {
