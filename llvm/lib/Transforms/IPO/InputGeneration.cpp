@@ -272,15 +272,51 @@ void InputGenInstrumenter::instrumentAddress(
   if (isa<GlobalVariable>(Object))
     return;
 
-  Value *Args[] = {Access.Addr,
-                   Access.V
-                       ? (Access.AccessTy->isIntOrIntVectorTy()
-                              ? IRB.CreateZExtOrTrunc(Access.V, Int64Ty)
-                              : IRB.CreateBitOrPointerCast(Access.V, Int64Ty))
-                       : ConstantInt::getNullValue(Int64Ty),
+  if (auto *ST = dyn_cast<StructType>(Access.AccessTy)) {
+    llvm_unreachable("Structs unsupported.");
+  } else if (auto *VT = dyn_cast<VectorType>(Access.AccessTy)) {
+    Type *ElTy = VT->getElementType();
+    int32_t ElAllocSize = DL.getTypeAllocSize(ElTy);
+    if (!VT->getElementCount().isScalable()) {
+      auto Count = VT->getElementCount().getFixedValue();
+      for (unsigned It = 0; It < Count; It++) {
+        auto *GEP = IRB.CreateConstGEP1_64(ElTy, Access.Addr, It);
+        Value *V = nullptr;
+        switch (Access.Kind) {
+        case InterestingMemoryAccess::READ:
+          assert(Access.V == nullptr);
+          break;
+        case InterestingMemoryAccess::WRITE:
+          assert(Access.V != nullptr);
+          V = IRB.CreateExtractElement(Access.V, IRB.getInt32(It));
+          break;
+        case InterestingMemoryAccess::READ_THEN_WRITE:
+          break;
+        }
+        emitMemoryAccessCallback(IRB, GEP, V, ElTy, ElAllocSize, Access.Kind,
+                                 Object);
+      }
+    } else {
+      llvm_unreachable("Scalable vectors unsupported.");
+    }
+  } else {
+    emitMemoryAccessCallback(IRB, Access.Addr, Access.V, Access.AccessTy,
+                             AllocSize, Access.Kind, Object);
+  }
+}
+
+void InputGenInstrumenter::emitMemoryAccessCallback(
+    IRBuilderBase &IRB, Value *Addr, Value *V, Type *AccessTy,
+    int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object) {
+
+  Value *Args[] = {Addr,
+                   V ? (AccessTy->isIntOrIntVectorTy()
+                            ? IRB.CreateZExtOrTrunc(V, Int64Ty)
+                            : IRB.CreateBitOrPointerCast(V, Int64Ty))
+                     : ConstantInt::getNullValue(Int64Ty),
                    ConstantInt::get(Int32Ty, AllocSize), Object,
-                   ConstantInt::get(Int32Ty, Access.Kind)};
-  auto Fn = InputGenMemoryAccessCallback[Access.AccessTy];
+                   ConstantInt::get(Int32Ty, Kind)};
+  auto Fn = InputGenMemoryAccessCallback[AccessTy];
   assert(Fn.getCallee());
   IRB.CreateCall(Fn, Args);
 }
@@ -699,10 +735,30 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
 
   SmallVector<Value *> Args;
   for (auto &Arg : F.args()) {
-    FunctionCallee ArgPtrFn = M.getOrInsertFunction(
-        InputGenCallbackPrefix + "arg_" + ::getTypeName(Arg.getType()),
-        FunctionType::get(Arg.getType(), false));
-    Args.push_back(IRB.CreateCall(ArgPtrFn, {}));
+    if (auto *ST = dyn_cast<StructType>(Arg.getType())) {
+      llvm_unreachable("Structs unsupported.");
+    } else if (auto *VT = dyn_cast<VectorType>(Arg.getType())) {
+      Type *ElTy = VT->getElementType();
+      if (!VT->getElementCount().isScalable()) {
+        auto Count = VT->getElementCount().getFixedValue();
+        Value *V = UndefValue::get(VT);
+        FunctionCallee ArgFn = M.getOrInsertFunction(
+            InputGenCallbackPrefix + "arg_" + ::getTypeName(ElTy),
+            FunctionType::get(ElTy, false));
+        for (unsigned It = 0; It < Count; It++) {
+          V = IRB.CreateInsertElement(V, IRB.CreateCall(ArgFn, {}),
+                                      IRB.getInt32(It));
+        }
+        Args.push_back(V);
+      } else {
+        llvm_unreachable("Scalable vectors unsupported.");
+      }
+    } else {
+      FunctionCallee ArgFn = M.getOrInsertFunction(
+          InputGenCallbackPrefix + "arg_" + ::getTypeName(Arg.getType()),
+          FunctionType::get(Arg.getType(), false));
+      Args.push_back(IRB.CreateCall(ArgFn, {}));
+    }
   }
   IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
 }

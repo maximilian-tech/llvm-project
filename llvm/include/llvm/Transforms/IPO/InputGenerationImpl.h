@@ -99,6 +99,10 @@ public:
                      const DataLayout &DL);
   void instrumentAddress(const InterestingMemoryAccess &Access,
                          const DataLayout &DL);
+  void emitMemoryAccessCallback(IRBuilderBase &IRB, Value *Addr, Value *V,
+                                Type *AccessTy, int32_t AllocSize,
+                                InterestingMemoryAccess::KindTy Kind,
+                                Value *Object);
   void instrumentMaskedLoadOrStore(const InterestingMemoryAccess &Access,
                                    const DataLayout &DL);
   void instrumentMemIntrinsic(MemIntrinsic *MI);
