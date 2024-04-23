@@ -15,6 +15,16 @@ entry:
   ret void
 }
 
+; Function Attrs: alwaysinline nounwind uwtable
+define hidden <2 x i64> @_mm_load_si128(ptr noundef %__p) #0 {
+entry:
+  %__p.addr = alloca ptr, align 8
+  store ptr %__p, ptr %__p.addr, align 8
+  %0 = load ptr, ptr %__p.addr, align 8
+  %1 = load <2 x i64>, ptr %0, align 16
+  ret <2 x i64> %1
+}
+
 attributes #0 = { alwaysinline nounwind uwtable "min-legal-vector-width"="128" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+avx,+cmov,+crc32,+cx8,+fxsr,+mmx,+popcnt,+sse,+sse2,+sse3,+sse4.1,+sse4.2,+ssse3,+x87,+xsave" "tune-cpu"="generic" }
 
 !llvm.module.flags = !{!0, !1, !2, !3}

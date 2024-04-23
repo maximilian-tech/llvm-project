@@ -275,7 +275,7 @@ void InputGenInstrumenter::instrumentAddress(
     for (unsigned It = 0; It < ST->getNumElements(); It++) {
       Type *ElTy = ST->getElementType(It);
       int32_t ElAllocSize = DL.getTypeAllocSize(ElTy);
-      auto *GEP = IRB.CreateConstGEP2_64(ElTy, Access.Addr, 0, It);
+      auto *GEP = IRB.CreateConstGEP2_64(Access.AccessTy, Access.Addr, 0, It);
       Value *V = nullptr;
       switch (Access.Kind) {
       case InterestingMemoryAccess::READ:
@@ -297,7 +297,7 @@ void InputGenInstrumenter::instrumentAddress(
     if (!VT->getElementCount().isScalable()) {
       auto Count = VT->getElementCount().getFixedValue();
       for (unsigned It = 0; It < Count; It++) {
-        auto *GEP = IRB.CreateConstGEP2_64(ElTy, Access.Addr, 0, It);
+        auto *GEP = IRB.CreateConstGEP2_64(Access.AccessTy, Access.Addr, 0, It);
         Value *V = nullptr;
         switch (Access.Kind) {
         case InterestingMemoryAccess::READ:
