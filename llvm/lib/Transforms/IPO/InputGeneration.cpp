@@ -258,7 +258,6 @@ void InputGenInstrumenter::instrumentAddress(
     const InterestingMemoryAccess &Access, const DataLayout &DL) {
   IRBuilder<> IRB(Access.I);
   IRB.SetCurrentDebugLocation(Access.I->getDebugLoc());
-  int32_t AllocSize = DL.getTypeAllocSize(Access.AccessTy);
   SmallVector<const Value *, 4> Objects;
   getUnderlyingObjects(Access.Addr, Objects, /*LI=*/nullptr,
                        /*MaxLookup=*/12);
@@ -280,7 +279,7 @@ void InputGenInstrumenter::instrumentAddress(
     if (!VT->getElementCount().isScalable()) {
       auto Count = VT->getElementCount().getFixedValue();
       for (unsigned It = 0; It < Count; It++) {
-        auto *GEP = IRB.CreateConstGEP1_64(ElTy, Access.Addr, It);
+        auto *GEP = IRB.CreateConstGEP2_64(ElTy, Access.Addr, 0, It);
         Value *V = nullptr;
         switch (Access.Kind) {
         case InterestingMemoryAccess::READ:
@@ -300,6 +299,7 @@ void InputGenInstrumenter::instrumentAddress(
       llvm_unreachable("Scalable vectors unsupported.");
     }
   } else {
+    int32_t AllocSize = DL.getTypeAllocSize(Access.AccessTy);
     emitMemoryAccessCallback(IRB, Access.Addr, Access.V, Access.AccessTy,
                              AllocSize, Access.Kind, Object);
   }
