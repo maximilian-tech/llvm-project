@@ -492,7 +492,7 @@ RW(void *, ptr)
 #undef RW
 
 #define ARG(TY, NAME)                                                          \
-  TY __inputgen_arg_##NAME(TY Arg) {                                           \
+  TY __inputgen_arg_##NAME() {                                                 \
     int32_t ObjIdx = -1;                                                       \
     getInputGenRT().Args.push_back(                                            \
         toArgTy<TY>(getInputGenRT().getNewValue<TY>(&ObjIdx), ObjIdx));        \
