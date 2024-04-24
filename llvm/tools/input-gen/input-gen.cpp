@@ -57,6 +57,8 @@ static cl::opt<bool>
 
 static cl::opt<bool> ClVerify("verify", cl::cat(InputGenCategory));
 
+static cl::opt<bool> ClDebug("g", cl::cat(InputGenCategory));
+
 static cl::opt<std::string> ClFunction("function", cl::cat(InputGenCategory));
 
 constexpr char ToolName[] = "input-gen";
@@ -323,9 +325,11 @@ public:
                          std::string RuntimeName) {
     if (ClCompileInputGenExecutables) {
       outs() << "Compiling " << ExecutableName << "\n";
-      SmallVector<StringRef, 8> Args = {
+      SmallVector<StringRef, 10> Args = {
           Clang,       "-fopenmp", "-O2", "-ldl",        "-rdynamic",
           RuntimeName, ModuleName, "-o",  ExecutableName};
+      if (ClDebug)
+        Args.push_back("-g");
       std::string ErrMsg;
       int Res = sys::ExecuteAndWait(
           Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
