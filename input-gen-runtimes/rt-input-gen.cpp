@@ -481,6 +481,24 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
     }                                                                          \
   }
 
+#define RWREF(TY, NAME)                                                        \
+  void __inputgen_access_##NAME(void *Ptr, int64_t Val, int32_t Size,          \
+                                void *Base, int32_t Kind) {                    \
+    static_assert(sizeof(TY) > 8);                                             \
+    TY TyVal;                                                                  \
+    switch (Kind) {                                                            \
+    case 0:                                                                    \
+      getInputGenRT().Heap->read<TY>(Ptr, Base, Size);                         \
+      return;                                                                  \
+    case 1:                                                                    \
+      TyVal = *(TY *)Val;                                                      \
+      getInputGenRT().Heap->write<TY>((TY *)Ptr, TyVal, Size);                 \
+      return;                                                                  \
+    default:                                                                   \
+      abort();                                                                 \
+    }                                                                          \
+  }
+
 RW(bool, i1)
 RW(char, i8)
 RW(short, i16)
@@ -489,6 +507,8 @@ RW(int64_t, i64)
 RW(float, float)
 RW(double, double)
 RW(void *, ptr)
+RWREF(__int128, i128)
+RWREF(long double, x86_fp80)
 #undef RW
 
 #define ARG(TY, NAME)                                                          \
@@ -507,6 +527,8 @@ ARG(int64_t, i64)
 ARG(float, float)
 ARG(double, double)
 ARG(void *, ptr)
+ARG(__int128, i128)
+ARG(long double, x86_fp80)
 #undef ARG
 
 void free(void *) {}

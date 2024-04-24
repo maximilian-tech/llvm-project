@@ -125,6 +125,8 @@ std::string getTypeName(const Type *Ty) {
     return "float";
   case Type::TypeID::DoubleTyID:
     return "double";
+  case Type::TypeID::X86_FP80TyID:
+    return "x86_fp80";
   default:
     return "unknown";
   };
@@ -327,17 +329,30 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
     IRBuilderBase &IRB, Value *Addr, Value *V, Type *AccessTy,
     int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object) {
 
-  Value *Args[] = {
-      Addr,
-      V ? (AccessTy->isIntOrIntVectorTy()
-               ? IRB.CreateZExtOrTrunc(V, Int64Ty)
-               : IRB.CreateZExtOrTrunc(
-                     IRB.CreateBitOrPointerCast(
-                         V, IntegerType::get(IRB.getContext(), AllocSize * 8)),
-                     Int64Ty))
-        : ConstantInt::getNullValue(Int64Ty),
-      ConstantInt::get(Int32Ty, AllocSize), Object,
-      ConstantInt::get(Int32Ty, Kind)};
+  Value *Val;
+  if (V) {
+    // If the value cannot fit in an i64, we need to pass it by reference.
+    if (AllocSize > 8) {
+      AllocaInst *Alloca = IRB.CreateAlloca(AccessTy);
+      BasicBlock &EntryBlock =
+          IRB.GetInsertBlock()->getParent()->getEntryBlock();
+      Alloca->moveBefore(EntryBlock, EntryBlock.getFirstNonPHIOrDbgOrAlloca());
+      IRB.CreateStore(V, Alloca);
+      Val = IRB.CreateBitOrPointerCast(Alloca, Int64Ty);
+    } else if (AccessTy->isIntOrIntVectorTy()) {
+      Val = IRB.CreateZExtOrTrunc(V, Int64Ty);
+    } else {
+      Val = IRB.CreateZExtOrTrunc(
+          IRB.CreateBitOrPointerCast(
+              V, IntegerType::get(IRB.getContext(), AllocSize * 8)),
+          Int64Ty);
+    }
+  } else {
+    Val = ConstantInt::getNullValue(Int64Ty);
+  }
+
+  Value *Args[] = {Addr, Val, ConstantInt::get(Int32Ty, AllocSize), Object,
+                   ConstantInt::get(Int32Ty, Kind)};
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
   if (!Fn.getCallee()) {
     LLVM_DEBUG(dbgs() << "No memory access callback for " << *AccessTy << "\n");
@@ -540,8 +555,8 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
 
   auto Prefix = getCallbackPrefix(Mode);
 
-  Type *Types[] = {Int1Ty,  Int8Ty, Int16Ty, Int32Ty,
-                   Int64Ty, PtrTy,  FloatTy, DoubleTy};
+  Type *Types[] = {Int1Ty,   Int8Ty, Int16Ty, Int32Ty,  Int64Ty,
+                   Int128Ty, PtrTy,  FloatTy, DoubleTy, X86_FP80Ty};
   for (Type *Ty : Types) {
     InputGenMemoryAccessCallback[Ty] =
         M.getOrInsertFunction(Prefix + "access_" + ::getTypeName(Ty), VoidTy,

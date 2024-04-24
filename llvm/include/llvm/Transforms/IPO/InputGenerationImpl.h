@@ -84,9 +84,11 @@ public:
     Int16Ty = IntegerType::getIntNTy(*Ctx, 16);
     Int32Ty = IntegerType::getIntNTy(*Ctx, 32);
     Int64Ty = IntegerType::getIntNTy(*Ctx, 64);
+    Int128Ty = IntegerType::getIntNTy(*Ctx, 128);
     VoidTy = PointerType::getVoidTy(*Ctx);
     FloatTy = Type::getFloatTy(*Ctx);
     DoubleTy = Type::getDoubleTy(*Ctx);
+    X86_FP80Ty = Type::getX86_FP80Ty(*Ctx);
   }
 
   /// If it is an interesting memory access, populate information
@@ -121,8 +123,8 @@ public:
       MaybeExtInitializedGlobals;
 
   IGInstrumentationModeTy Mode;
-  Type *VoidTy, *FloatTy, *DoubleTy;
-  IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty;
+  Type *VoidTy, *FloatTy, *DoubleTy, *X86_FP80Ty;
+  IntegerType *Int1Ty, *Int8Ty, *Int16Ty, *Int32Ty, *Int64Ty, *Int128Ty;
   PointerType *PtrTy;
   LLVMContext *Ctx;
 

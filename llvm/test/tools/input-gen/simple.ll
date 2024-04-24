@@ -1,5 +1,6 @@
-; RUN: input-gen --verify --output-dir %T --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
-; RUN: %S/run_all.sh %T
+; RUN: mkdir -p %T/%s
+; RUN: input-gen --verify --output-dir %T/%s --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
+; RUN: %S/run_all.sh %T/%s
 
 define dso_local float @float(ptr noundef %LL) local_unnamed_addr #0 {
 entry:
@@ -15,11 +16,25 @@ entry:
   ret double %a
 }
 
+define dso_local x86_fp80 @x86_fp80(ptr noundef %LL) local_unnamed_addr #0 {
+entry:
+  %a = load x86_fp80, ptr %LL
+  store x86_fp80 %a, ptr %LL
+  ret x86_fp80 %a
+}
+
 define dso_local ptr @ptr(ptr noundef %LL) local_unnamed_addr #0 {
 entry:
   %a = load ptr, ptr %LL
   store ptr %a, ptr %LL
   ret ptr %a
+}
+
+define dso_local i128 @i128(ptr noundef %LL) local_unnamed_addr #0 {
+entry:
+  %a = load i128, ptr %LL
+  store i128 %a, ptr %LL
+  ret i128 %a
 }
 
 define dso_local i64 @i64(ptr noundef %LL) local_unnamed_addr #0 {
@@ -82,6 +97,11 @@ entry:
   ret i64 %LL
 }
 
+define dso_local i128 @i128_a(i128 %LL) local_unnamed_addr #0 {
+entry:
+  ret i128 %LL
+}
+
 define dso_local float @float_a(float %LL) local_unnamed_addr #0 {
 entry:
   ret float %LL
@@ -90,6 +110,11 @@ entry:
 define dso_local double @double_a(double %LL) local_unnamed_addr #0 {
 entry:
   ret double %LL
+}
+
+define dso_local x86_fp80 @x86_fp80_a(x86_fp80 %LL) local_unnamed_addr #0 {
+entry:
+  ret x86_fp80 %LL
 }
 
 define dso_local ptr @ptr_a(ptr %LL) local_unnamed_addr #0 {
