@@ -452,9 +452,11 @@ void *__inputgen_memset(void *Tgt, char C, uint64_t N) {
       return;                                                                  \
     case 1:                                                                    \
       TY TyVal;                                                                \
+      /* We need to reinterpret_cast fp types because they are just bitcast    \
+         to the int64_t type in LLVM. */                                       \
       if (std::is_same<TY, float>::value) {                                    \
         TyVal = *reinterpret_cast<TY *>(((int32_t)Val));                       \
-      } else if (std::is_same<TY, float>::value) {                             \
+      } else if (std::is_same<TY, double>::value) {                            \
         TyVal = *reinterpret_cast<TY *>((Val));                                \
       } else {                                                                 \
         TyVal = (TY)Val;                                                       \
