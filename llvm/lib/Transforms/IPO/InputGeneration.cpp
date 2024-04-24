@@ -339,7 +339,10 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
       ConstantInt::get(Int32Ty, AllocSize), Object,
       ConstantInt::get(Int32Ty, Kind)};
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
-  assert(Fn.getCallee());
+  if (!Fn.getCallee()) {
+    LLVM_DEBUG(dbgs() << "No memory access callback for " << *AccessTy << "\n");
+    llvm_unreachable("No memory access callback");
+  }
   IRB.CreateCall(Fn, Args);
 }
 
