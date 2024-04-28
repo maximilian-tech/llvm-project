@@ -1,12 +1,12 @@
-; RUN: mkdir -p %T/%s
-; RUN: input-gen --verify --output-dir %T/%s --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
-; RUN: %S/run_all.sh %T/%s
+; RUN: mkdir -p %t
+; RUN: input-gen --verify --output-dir %t --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
+; RUN: %S/run_all.sh %t
 ;
-; RUN: mkdir -p %T/%s/function-wise/
-; RUN: input-gen --verify --output-dir %T/%s/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function foo
-; RUN: %T/%s/function-wise/input-gen.function.foo.generate.a.out %T/function-wise/ 2 4
-; RUN: %T/%s/function-wise/input-gen.function.foo.run.a.out %T/function-wise/input-gen.function.foo.generate.a.out.input.2.bin
-; RUN: %T/%s/function-wise/input-gen.function.foo.run.a.out %T/function-wise/input-gen.function.foo.generate.a.out.input.3.bin
+; RUN: mkdir -p %t/function-wise/
+; RUN: input-gen --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function foo
+; RUN: %t/function-wise/input-gen.function.foo.generate.a.out %T/function-wise/ 2 4
+; RUN: %t/function-wise/input-gen.function.foo.run.a.out %T/function-wise/input-gen.function.foo.generate.a.out.input.2.bin
+; RUN: %t/function-wise/input-gen.function.foo.run.a.out %T/function-wise/input-gen.function.foo.generate.a.out.input.3.bin
 
 source_filename = "linked_list.c"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
