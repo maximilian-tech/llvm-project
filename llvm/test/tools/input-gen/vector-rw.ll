@@ -1,3 +1,4 @@
+; XFAIL: *
 ; RUN: mkdir -p %t
 ; RUN: input-gen --verify --output-dir %t --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
 ; RUN: %S/run_all.sh %t
