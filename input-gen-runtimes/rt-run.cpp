@@ -112,13 +112,17 @@ int main(int argc, char **argv) {
   for (uint32_t I = 0; I < NumObjects; I++) {
     [[maybe_unused]] auto Idx = readV<uintptr_t>(Input);
     assert(I == Idx);
-    auto Size = readV<intptr_t>(Input);
-    auto Offset = readV<intptr_t>(Input);
-    INPUTGEN_DEBUG(printf("O #%u -> size %ld offset %ld at %p\n", I, Size,
-                          Offset, (void *)CurMemory));
-    Objects.push_back({CurMemory, Size, Offset});
-    Input.read(ccast(CurMemory), Size);
-    CurMemory += Size;
+    auto InputSize = readV<intptr_t>(Input);
+    auto InputOffset = readV<intptr_t>(Input);
+    auto OutputSize = readV<intptr_t>(Input);
+    auto OutputOffset = readV<intptr_t>(Input);
+    INPUTGEN_DEBUG(printf("O #%u -> input size %ld offset %ld, output size %ld "
+                          "offset %ld at %p\n",
+                          I, InputSize, InputOffset, OutputSize, OutputOffset,
+                          (void *)CurMemory));
+    Objects.push_back({CurMemory, OutputSize, OutputOffset});
+    Input.read(ccast(CurMemory - OutputOffset + InputOffset), InputSize);
+    CurMemory += OutputSize;
   }
 
   auto NumGlobals = readV<uint32_t>(Input);
