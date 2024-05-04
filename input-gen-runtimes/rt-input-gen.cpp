@@ -657,7 +657,7 @@ int main(int argc, char **argv) {
   INPUTGEN_DEBUG(std::cerr << "Stack pointer: " << (void *)StackPtr
                            << std::endl);
 
-  if (argc != 5 && argc != 4) {
+  if (argc != 6 && argc != 4) {
     std::cerr << "Wrong usage." << std::endl;
     return 1;
   }
@@ -667,10 +667,10 @@ int main(int argc, char **argv) {
   int End = std::stoi(argv[3]);
   std::string FuncName = ("__inputgen_entry");
   std::string FuncIdent = "";
-  if (argc == 5) {
+  if (argc == 6) {
     FuncName += "___inputgen_renamed_";
     FuncName += argv[4];
-    FuncIdent += argv[4];
+    FuncIdent += argv[5];
   }
 
   int Size = End - Start;

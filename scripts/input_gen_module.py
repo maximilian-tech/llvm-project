@@ -149,7 +149,12 @@ class InputGenModule:
             self.print("input-gen args:", " ".join(igargs))
             raise(e)
         else:
-            for fname in available_functions_file.read().splitlines():
+            for line in available_functions_file.read().splitlines():
+                splitline = line.split(' ')
+                assert(len(splitline) == 2)
+                fid = splitline[0]
+                fname = splitline[1]
+
                 func = Function(fname, self.verbose)
                 self.functions.append(func)
 
@@ -157,7 +162,7 @@ class InputGenModule:
                     self.outdir, 'input-gen.module.generate.a.out')
                 input_run_executable = os.path.join(
                     self.outdir, 'input-gen.module.run.a.out')
-                inputs_dir = os.path.join(self.outdir, 'input-gen.' + fname + '.inputs')
+                inputs_dir = os.path.join(self.outdir, 'input-gen.' + fid + '.inputs')
 
                 if not os.path.isfile(input_gen_executable):
                     continue
@@ -170,7 +175,7 @@ class InputGenModule:
                 func.input_gen_executable = input_gen_executable
                 func.inputs_dir = inputs_dir
 
-                self.print('Generating inputs for function @{}'.format(fname))
+                self.print('Generating inputs for function {} @{}'.format(fid, fname))
 
                 seed = 0
                 for _ in range(self.input_gen_num):
@@ -185,6 +190,7 @@ class InputGenModule:
                                     inputs_dir,
                                     str(start), str(end),
                                     fname,
+                                    fid,
                                 ]
                             self.print('ig args generation:', ' '.join(iggenargs))
                             proc = subprocess.Popen(
@@ -200,13 +206,13 @@ class InputGenModule:
                             out, err = proc.communicate(timeout=self.input_gen_timeout)
 
                             if proc.returncode != 0:
-                                self.print('Input gen process failed: @{}'.format(fname))
+                                self.print('Input gen process failed: {} @{}'.format(fid, fname))
                             else:
-                                self.print('Input gen process succeeded: @{}'.format(fname))
+                                self.print('Input gen process succeeded: {} @{}'.format(fid, fname))
                                 # Populate the generated inputs
                                 fins = [os.path.join(inputs_dir,
                                                     '{}.input.{}.{}.bin'.format(
-                                                        os.path.basename(input_gen_executable), fname, str(i)))
+                                                        os.path.basename(input_gen_executable), fid, str(i)))
                                     for i in range(start, end)]
                                 func.inputs += fins
                                 for inpt in func.inputs:
@@ -218,9 +224,9 @@ class InputGenModule:
                                 break
 
                         except subprocess.CalledProcessError as e:
-                            self.print('Input gen process failed: @{}'.format(fname))
+                            self.print('Input gen process failed: {} @{}'.format(fid, fname))
                         except subprocess.TimeoutExpired as e:
-                            self.print('Input gen timed out! Terminating...: @{}'.format(fname))
+                            self.print('Input gen timed out! Terminating...: {} @{}'.format(fid, fname))
                             proc.terminate()
                             try:
                                 proc.communicate(timeout=1)

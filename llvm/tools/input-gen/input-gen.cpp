@@ -280,10 +280,12 @@ public:
   void dumpFunctions() {
     std::string AvailFuncsFileName = ClOutputDir + "/" + "available_functions";
     auto Fs = std::ofstream(AvailFuncsFileName);
+    unsigned Idx = 0;
     for (auto &F : M.getFunctionList()) {
       if (shouldGen(F)) {
-        Fs << F.getName().str() << std::endl;
+        Fs << Idx << " " << F.getName().str() << std::endl;
         Functions.push_back(&F);
+        Idx++;
       }
     }
     Fs.flush();
