@@ -215,7 +215,7 @@ class InputGenModule:
                                                         os.path.basename(input_gen_executable), fid, str(i)))
                                     for i in range(start, end)]
                                 func.inputs += fins
-                                for inpt in func.inputs:
+                                for inpt in fins:
                                     # If the input gen process exited successfully these
                                     # _must_ be here
                                     assert(os.path.isfile(inpt))
