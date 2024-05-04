@@ -447,7 +447,7 @@ struct InputGenRTTy {
       auto MemoryChunk = Obj->getAlignedInputMemory();
       INPUTGEN_DEBUG(
           printf("Obj #%zu aligned memory chunk at %p, input size %lu, input "
-                 "offset %lu, output size %lu, output offset %lu\n",
+                 "offset %ld, output size %lu, output offset %ld\n",
                  Obj->Idx, (void *)MemoryChunk.Ptr, MemoryChunk.InputSize,
                  MemoryChunk.InputOffset, MemoryChunk.OutputSize,
                  MemoryChunk.OutputOffset));
