@@ -18,8 +18,10 @@ int VERBOSE = 0;
 
 struct ObjectTy {
   VoidPtrTy Start;
-  intptr_t Size;
-  intptr_t BaseOffset;
+  intptr_t InputSize;
+  intptr_t InputOffset;
+  intptr_t OutputSize;
+  intptr_t OutputOffset;
 };
 
 static unsigned NumStubs;
@@ -48,9 +50,10 @@ void __inputgen_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
   assert(Globals.size() > CurGlobal);
   ObjectTy Obj = Globals[CurGlobal];
   // We cannot access globals with negative offsets
-  assert(Obj.BaseOffset >= 0);
-  assert(Obj.Size <= GlobalSize);
-  memcpy(Global + Obj.BaseOffset, Obj.Start, Obj.Size);
+  assert(Obj.InputOffset >= 0);
+  assert(Obj.InputSize <= GlobalSize);
+  memcpy(Global + Obj.InputOffset,
+         Obj.Start - Obj.OutputOffset + Obj.InputOffset, Obj.InputSize);
   CurGlobal++;
 }
 
@@ -120,7 +123,8 @@ int main(int argc, char **argv) {
                           "offset %ld at %p\n",
                           I, InputSize, InputOffset, OutputSize, OutputOffset,
                           (void *)CurMemory));
-    Objects.push_back({CurMemory, OutputSize, OutputOffset});
+    Objects.push_back(
+        {CurMemory, InputSize, InputOffset, OutputSize, OutputOffset});
     Input.read(ccast(CurMemory - OutputOffset + InputOffset), InputSize);
     CurMemory += OutputSize;
   }
@@ -146,7 +150,7 @@ int main(int argc, char **argv) {
     VoidPtrTy LocalPtr = OA.globalPtrToLocalPtr(GlobalPtr);
     ObjectTy Obj = Objects[OA.globalPtrToObjIdx(GlobalPtr) - ObjIdxOffset];
     intptr_t Offset = OA.getOffsetFromObjBasePtr(LocalPtr);
-    VoidPtrTy RealPtr = Obj.Start + Obj.BaseOffset + Offset;
+    VoidPtrTy RealPtr = Obj.Start - Obj.OutputOffset + Offset;
     *PtrLoc = RealPtr;
     INPUTGEN_DEBUG(printf("Relocate %s %p -> %p\n", Type, (void *)GlobalPtr,
                           (void *)RealPtr));
@@ -160,8 +164,8 @@ int main(int argc, char **argv) {
     auto Obj = Objects[I];
     for (uintptr_t J = 0; J < NumPtrs; J++) {
       auto PtrOffset = readV<intptr_t>(Input);
-      VoidPtrTy *PtrLoc =
-          reinterpret_cast<VoidPtrTy *>(Obj.Start + Obj.BaseOffset + PtrOffset);
+      VoidPtrTy *PtrLoc = reinterpret_cast<VoidPtrTy *>(
+          Obj.Start + Obj.OutputOffset + PtrOffset);
       RelocatePointer(PtrLoc, "Obj");
     }
   }

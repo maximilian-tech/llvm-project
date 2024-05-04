@@ -26,16 +26,42 @@ int VERBOSE = 0;
 
 static constexpr intptr_t MinObjAllocation = 64;
 
+template <typename T> static T divFloor(T A, T B) {
+  assert(B > 0);
+  T Res = A / B;
+  T Rem = A % B;
+  if (Rem == 0)
+    return Res;
+  if (Rem < 0) {
+    assert(A < 0);
+    return Res - 1;
+  }
+  assert(A > 0);
+  return Res;
+}
+
+template <typename T> static T divCeil(T A, T B) {
+  assert(B > 0);
+  T Res = A / B;
+  T Rem = A % B;
+  if (Rem == 0)
+    return Res;
+  if (Rem > 0) {
+    assert(A > 0);
+    return Res + 1;
+  }
+  assert(A < 0);
+  return Res;
+}
+
 template <typename T> static T alignStart(T Ptr, intptr_t Alignment) {
   intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
-  return reinterpret_cast<T>(IPtr / Alignment * Alignment);
+  return reinterpret_cast<T>(divFloor(IPtr, Alignment) * Alignment);
 }
 
 template <typename T> static T alignEnd(T Ptr, intptr_t Alignment) {
   intptr_t IPtr = reinterpret_cast<intptr_t>(Ptr);
-  if (IPtr == 0)
-    return (T)0;
-  return reinterpret_cast<T>((((IPtr - 1) / Alignment) + 1) * Alignment);
+  return reinterpret_cast<T>(divCeil(IPtr, Alignment) * Alignment);
 }
 
 static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
@@ -65,17 +91,14 @@ struct ObjectTy {
   };
 
   AlignedMemoryChunk getAlignedInputMemory() {
-    VoidPtrTy Start = alignStart(InputLimits.LowestOffset + Input.Memory -
-                                     Input.AllocationOffset,
-                                 ObjAlignment);
-    VoidPtrTy End = alignEnd(InputLimits.HighestOffset + Input.Memory -
-                                 Input.AllocationOffset,
-                             ObjAlignment);
-    assert(reinterpret_cast<intptr_t>(Start) % ObjAlignment == 0 &&
-           reinterpret_cast<intptr_t>(End) % ObjAlignment == 0);
-    return {Start, End - Start, InputLimits.LowestOffset,
-            OutputLimits.HighestOffset - OutputLimits.LowestOffset,
-            OutputLimits.LowestOffset};
+    VoidPtrTy InputStart =
+        InputLimits.LowestOffset + Input.Memory - Input.AllocationOffset;
+    VoidPtrTy InputEnd =
+        InputLimits.HighestOffset + Input.Memory - Input.AllocationOffset;
+    intptr_t OutputStart = alignStart(OutputLimits.LowestOffset, ObjAlignment);
+    intptr_t OutputEnd = alignEnd(OutputLimits.HighestOffset, ObjAlignment);
+    return {InputStart, InputEnd - InputStart, InputLimits.LowestOffset,
+            OutputEnd - OutputStart, OutputStart};
   }
 
   template <typename T> T read(VoidPtrTy Ptr, uint32_t Size);
