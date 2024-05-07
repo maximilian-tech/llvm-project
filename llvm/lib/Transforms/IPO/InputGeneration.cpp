@@ -583,10 +583,10 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
     InputGenMemoryAccessCallback[Ty] =
         M.getOrInsertFunction(Prefix + "access_" + ::getTypeName(Ty), VoidTy,
                               PtrTy, Int64Ty, Int32Ty, PtrTy, Int32Ty);
-    ValueGenCallback[Ty] =
+    auto ValueGenFunc =
         M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty);
-    ArgGenCallback[Ty] =
-        M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty);
+    StubValueGenCallback[Ty] = ValueGenFunc;
+    ArgGenCallback[Ty] = ValueGenFunc;
   }
 
   InputGenMemmove =
@@ -627,7 +627,8 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
     if (RTy->isVoidTy())
       IRB.CreateRetVoid();
     else
-      IRB.CreateRet(constructTypeUsingCallbacks(M, IRB, ValueGenCallback, RTy));
+      IRB.CreateRet(
+          constructTypeUsingCallbacks(M, IRB, StubValueGenCallback, RTy));
   }
 }
 

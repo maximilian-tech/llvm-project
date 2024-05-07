@@ -138,7 +138,7 @@ public:
 
 private:
   CallbackCollectionTy InputGenMemoryAccessCallback;
-  CallbackCollectionTy ValueGenCallback;
+  CallbackCollectionTy StubValueGenCallback;
   CallbackCollectionTy ArgGenCallback;
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
