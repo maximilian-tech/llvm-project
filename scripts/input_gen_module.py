@@ -208,20 +208,29 @@ class InputGenModule:
                             if proc.returncode != 0:
                                 self.print('Input gen process failed: {} @{}'.format(fid, fname))
                             else:
-                                self.print('Input gen process succeeded: {} @{}'.format(fid, fname))
-                                # Populate the generated inputs
                                 fins = [os.path.join(inputs_dir,
                                                     '{}.input.{}.{}.bin'.format(
                                                         os.path.basename(input_gen_executable), fid, str(i)))
                                     for i in range(start, end)]
-                                func.inputs += fins
+                                succeeded = True
                                 for inpt in fins:
-                                    # If the input gen process exited successfully these
-                                    # _must_ be here
-                                    assert(os.path.isfile(inpt))
-                                func.succeeded_seeds += list(range(start, end))
-
-                                break
+                                    # If the input gen process exited
+                                    # successfully these _must_ be here
+                                    if not os.path.isfile(inpt):
+                                        # Something went terribly wrong (for
+                                        # example the function we are generating
+                                        # input for accidentally overwrote our
+                                        # state or did exit(0) or something like
+                                        # that. (Happens in
+                                        # 12374:_ZN25vnl_symmetric_eigensystemIdE5solveERK10vnl_vectorIdEPS2_)
+                                        succeeded = False
+                                        break
+                                if succeeded:
+                                    self.print('Input gen process succeeded: {} @{}'.format(fid, fname))
+                                    # Populate the generated inputs
+                                    func.succeeded_seeds += list(range(start, end))
+                                    func.inputs += fins
+                                    break
 
                         except subprocess.CalledProcessError as e:
                             self.print('Input gen process failed: {} @{}'.format(fid, fname))
