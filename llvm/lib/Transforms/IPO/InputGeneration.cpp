@@ -420,13 +420,19 @@ static void renameGlobals(Module &M) {
     if (!S.isDeclaration())
       S.setName("__inputgen_renamed_" + S.getName());
   };
-  for (auto &X : M.globals())
+  for (auto &X : M.globals()) {
+    X.setComdat(nullptr);
     Rename(X);
-  for (auto &X : M.functions())
+  }
+  for (auto &X : M.functions()) {
+    X.setComdat(nullptr);
     Rename(X);
+  }
+  for (auto &X : M.ifuncs()) {
+    X.setComdat(nullptr);
+    Rename(X);
+  }
   for (auto &X : M.aliases())
-    Rename(X);
-  for (auto &X : M.ifuncs())
     Rename(X);
 }
 
