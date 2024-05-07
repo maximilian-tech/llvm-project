@@ -68,10 +68,6 @@ static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
   return reinterpret_cast<uint8_t *>(Ptr) + Bytes;
 }
 
-static intptr_t diff(VoidPtrTy LHS, VoidPtrTy RHS) {
-  return reinterpret_cast<uint8_t *>(LHS) - reinterpret_cast<uint8_t *>(RHS);
-}
-
 struct ObjectTy {
   const ObjectAddressing &OA;
   ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output)
@@ -346,7 +342,7 @@ struct InputGenRTTy {
     size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
     INPUTGEN_DEBUG(std::cerr << "Access: " << (void *)GlobalPtr << " Obj #"
                              << Idx << std::endl);
-    bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
+    [[maybe_unused]] bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
     bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
     assert(IsExistingObj || IsOutsideObjMemory);
     if (IsOutsideObjMemory) {
@@ -474,7 +470,7 @@ struct InputGenRTTy {
                  Obj->Idx, (void *)MemoryChunk.Ptr, MemoryChunk.InputSize,
                  MemoryChunk.InputOffset, MemoryChunk.OutputSize,
                  MemoryChunk.OutputOffset));
-      writeV<intptr_t>(InputOut, Obj->Idx);
+      writeV<intptr_t>(InputOut, I);
       writeV<intptr_t>(InputOut, MemoryChunk.InputSize);
       writeV<intptr_t>(InputOut, MemoryChunk.InputOffset);
       writeV<intptr_t>(InputOut, MemoryChunk.OutputSize);
