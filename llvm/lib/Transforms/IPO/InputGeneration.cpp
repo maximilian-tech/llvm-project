@@ -15,6 +15,7 @@
 
 #include "llvm/Transforms/IPO/InputGeneration.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
 
 #include "llvm/ADT/EnumeratedArray.h"
@@ -109,11 +110,29 @@ STATISTIC(NumInstrumented, "Number of instrumented instructions");
 
 namespace {
 
+// These are global variables that are never meant to be defined and are just
+// used to identify types in the source language
+bool isLandingPadType(GlobalVariable &GV) {
+  return all_of(GV.uses(), [](Use &U) {
+    if (isa<LandingPadInst>(U.getUser()))
+      return true;
+    else if (auto CB = dyn_cast<CallBase>(U.getUser()))
+      return CB->getCalledFunction() &&
+             CB->getCalledFunction()->getName() == "llvm.eh.typeid.for";
+    else
+      return false;
+  });
+}
+
 bool isLibCGlobal(StringRef Name) {
   return StringSwitch<bool>(Name)
       .Case("stderr", true)
       .Case("stdout", true)
       .Default(false);
+}
+
+bool shouldPreserveGV(GlobalVariable &GV) {
+  return isLandingPadType(GV) || isLibCGlobal(GV.getName());
 }
 
 std::string getTypeName(const Type *Ty) {
@@ -422,6 +441,8 @@ static void renameGlobals(Module &M) {
   };
   for (auto &X : M.globals()) {
     X.setComdat(nullptr);
+    if (shouldPreserveGV(X))
+      continue;
     Rename(X);
   }
   for (auto &X : M.functions()) {
@@ -647,7 +668,7 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
     GVDtor->eraseFromParent();
 
   for (GlobalVariable &GV : M.globals()) {
-    if (isLibCGlobal(GV.getName()))
+    if (shouldPreserveGV(GV))
       continue;
     if (GV.hasExternalLinkage() || !GV.isConstant())
       MaybeExtInitializedGlobals.push_back({&GV, nullptr});
