@@ -358,9 +358,10 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
   if (!Fn.getCallee()) {
     LLVM_DEBUG(dbgs() << "No memory access callback for " << *AccessTy << "\n");
-    llvm_unreachable("No memory access callback");
+    IRB.CreateUnreachable();
+  } else {
+    IRB.CreateCall(Fn, Args);
   }
-  IRB.CreateCall(Fn, Args);
 }
 
 static std::string getCallbackPrefix(IGInstrumentationModeTy Mode) {
@@ -803,7 +804,14 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
       llvm_unreachable("Scalable vectors unsupported.");
     }
   } else {
-    return IRB.CreateCall(CC[T], {});
+    FunctionCallee Fn = CC[T];
+    if (!Fn.getCallee()) {
+      LLVM_DEBUG(dbgs() << "No value gen callback for " << *T << "\n");
+      IRB.CreateUnreachable();
+      return UndefValue::get(T);
+    } else {
+      return IRB.CreateCall(Fn, {});
+    }
   }
 }
 
