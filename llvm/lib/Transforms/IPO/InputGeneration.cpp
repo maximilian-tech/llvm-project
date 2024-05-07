@@ -135,6 +135,16 @@ bool shouldPreserveGV(GlobalVariable &GV) {
   return isLandingPadType(GV) || isLibCGlobal(GV.getName());
 }
 
+bool isAllowedExternFunc(Function &F, TargetLibraryInfo &TLI) {
+  return StringSwitch<bool>(F.getName()).Case("printf", true).Default(false);
+
+  // TODO Maybe provide a way for the user to specify the allowed external
+  // functions
+  LibFunc LF;
+  if (TLI.getLibFunc(F, LF) && TLI.has(LF))
+    return true;
+}
+
 std::string getTypeName(const Type *Ty) {
   switch (Ty->getTypeID()) {
   case Type::TypeID::PointerTyID:
@@ -640,8 +650,7 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
     if (F.getName().starts_with(Prefix))
       continue;
 
-    LibFunc LF;
-    if (TLI.getLibFunc(F, LF) && TLI.has(LF))
+    if (isAllowedExternFunc(F, TLI))
       continue;
 
     F.setLinkage(GlobalValue::WeakAnyLinkage);
