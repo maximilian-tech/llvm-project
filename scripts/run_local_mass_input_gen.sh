@@ -41,4 +41,4 @@ echo less "$JOB_LOG"
     --input-run-timeout 5 \
     --num-procs="$NUM_CPU" $ADDITIONAL_FLAGS &> "$JOB_LOG" || true
 
-ls -lt "/l/ssd/$USER/compile-input-gen-out/" | head -n "$NUM_CPU"
+ls -lt "/l/ssd/$USER/compile-input-gen-out/" | head -n "$(("$NUM_CPU" + 1))"
