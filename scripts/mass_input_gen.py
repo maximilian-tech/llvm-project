@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import ray
+import json
 import subprocess
 import argparse
 import os
@@ -8,35 +8,9 @@ import sys
 import multiprocessing
 import functools
 from datasets import load_dataset
-from ray.util.actor_pool import ActorPool
+import jug
 
 import input_gen_module
-
-@ray.remote(num_cpus=1)
-class ModuleHandler:
-    def __init__(self, dataset, global_outdir, igm_args, verbose):
-        self.ds = load_dataset(dataset, split='train', streaming=True)
-        self.global_outdir = global_outdir
-        self.igm_args = igm_args
-        self.verbose = verbose
-    def handle_single_module(self, i):
-        if i % 100 == 0:
-            print("Module #{}".format(i))
-        ds_i = self.ds.skip(i)
-        module = list(ds_i.take(1))[0]
-
-        self.igm_args['outdir'] = os.path.join(self.global_outdir, str(i))
-        os.makedirs(self.igm_args['outdir'], exist_ok=True)
-        with open(self.igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
-            module_file.write(module['content'])
-            module_file.flush()
-            self.igm_args['input_module'] = module_file.name
-
-            igm = input_gen_module.InputGenModule(**self.igm_args)
-            igm.generate_inputs()
-            igm.run_all_inputs()
-
-            return igm.get_statistics()
 
 def precompile_runtimes(args):
     print('Precompiling runtimes...')
@@ -68,31 +42,37 @@ def precompile_runtime(fname, debug):
     else:
         return fname
 
-def handle_single_module(task):
+def pretty_print_statistics(stats):
+    print('Module statistics:')
+    print('{')
+    for k, v in stats:
+        print('{}: {},'.format(k, v))
+    print('}')
+
+def handle_single_module_i(i):
+    ds_i = ds.skip(i)
+    module = list(ds_i.take(1))[0]
+    return handle_single_module((i, module), args)
+
+def handle_single_module(task, args):
     (i, module) = task
 
+    global_outdir = args.outdir
+    igm_args = vars(args)
     igm_args['outdir'] = os.path.join(global_outdir, str(i))
     os.makedirs(igm_args['outdir'], exist_ok=True)
     with open(igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
         module_file.write(module['content'])
         module_file.flush()
-        igm_args['input_module'] = module_file.name
+    igm_args['input_module'] = module_file.name
 
-        igm = input_gen_module.InputGenModule(**igm_args)
-        igm.generate_inputs()
-        igm.run_all_inputs()
+    igm = input_gen_module.InputGenModule(**igm_args)
+    igm.generate_inputs()
+    igm.run_all_inputs()
 
-        return igm.get_statistics()
+    return igm.get_statistics()
 
-def pretty_print_statistics(stats):
-    print('Module statistics:')
-
-    for k, v in stats:
-        print(k, v)
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('MassInputGen')
-
+def add_option_args(parser):
     parser.add_argument('--dataset', default='llvm-ml/ComPile')
     parser.add_argument('--outdir', required=True)
 
@@ -105,36 +85,32 @@ if __name__ == '__main__':
     parser.add_argument('--no-precompile-rts',
                         dest='precompile_rts', action='store_false')
     parser.set_defaults(precompile_rts=True)
-    parser.add_argument('--use-ray', action='store_true')
+    parser.add_argument('--report-jug-results', action='store_true')
 
     input_gen_module.add_option_args(parser)
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser('MassInputGen')
+    add_option_args(parser)
     args = parser.parse_args()
 
     if args.precompile_rts:
         precompile_runtimes(args)
 
-    if args.use_ray:
+    ds = load_dataset(args.dataset, split='train', streaming=True)
 
-        ray.init()
+    os.makedirs(args.outdir, exist_ok=True)
 
-        resources = ray.cluster_resources()
-        print("Resources:", ray.cluster_resources())
+    print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
 
-        if args.num_procs is None:
-            args.num_procs = int(resources['CPU'])
-        else:
-            print("WARNING SETTING NUM PROCS WHEN USING RAY NOT RECOMMENDED")
-        igm_args = vars(args)
-        actors = []
-        global_outdir = args.outdir
-        igm_args = vars(args)
-        for _ in range(args.num_procs):
-            actors.append(ModuleHandler.remote(args.dataset, global_outdir, igm_args, args.verbose))
-        pool = ActorPool(actors)
-        stats = list(pool.map(lambda a, v: a.handle_single_module.remote(v), range(args.start, args.end)))
-
+    global_outdir = args.outdir
+    igm_args = vars(args)
+    ds = ds.skip(args.start)
+    with multiprocessing.Pool(args.num_procs) as pool:
+        tasks = list(zip(range(args.start, args.end), ds))
+        stats = pool.imap(handle_single_module, tasks, chunksize=1)
         empty = input_gen_module.InputGenModule().get_empty_statistics()
+        stats = list(stats)
         agg_stats = functools.reduce(
             input_gen_module.InputGenModule().add_statistics, stats, empty)
 
@@ -142,25 +118,34 @@ if __name__ == '__main__':
 
         print('Statistics: {}'.format(agg_stats))
 
+if jug.is_jug_running():
+    parser = argparse.ArgumentParser('MassInputGenJug')
+    add_option_args(parser)
+    args = parser.parse_args()
+
+    if args.precompile_rts:
+        print('Precompiling runtimes...')
+        igr = jug.Task(precompile_runtime, args.input_gen_runtime, args.g)
+        irr = jug.Task(precompile_runtime, args.input_run_runtime, args.g)
+        jug.barrier()
+        print('Done:')
+        args.input_gen_runtime = jug.task.value(igr)
+        args.input_run_runtime = jug.task.value(irr)
+        print(args.input_gen_runtime)
+        print(args.input_run_runtime)
+
+    ds = load_dataset(args.dataset, split='train', streaming=True)
+
+    os.makedirs(args.outdir, exist_ok=True)
+
+    print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
+
+    results = []
+    for i in range(args.start, args.end):
+        results.append(jug.Task(handle_single_module_i, i))
+    results = list(zip(range(args.start, args.end), results))
+
+    if args.report_jug_results:
+        pretty_print_statistics(jug.task.value(results))
     else:
-        ds = load_dataset(args.dataset, split='train', streaming=True)
-
-        os.makedirs(args.outdir, exist_ok=True)
-
-        print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
-
-        global_outdir = args.outdir
-        igm_args = vars(args)
-
-        ds = ds.skip(args.start)
-        with multiprocessing.Pool(args.num_procs) as pool:
-            tasks = list(zip(range(args.start, args.end), ds))
-            stats = pool.imap(handle_single_module, tasks, chunksize=1)
-            empty = input_gen_module.InputGenModule().get_empty_statistics()
-            stats = list(stats)
-            agg_stats = functools.reduce(
-                input_gen_module.InputGenModule().add_statistics, stats, empty)
-
-            pretty_print_statistics(list(zip(range(args.start, args.end), stats)))
-
-            print('Statistics: {}'.format(agg_stats))
+        print('Done')
