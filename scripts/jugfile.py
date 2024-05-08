@@ -24,17 +24,21 @@ args = parser.parse_args()
 if not args.get_jug_results:
 
     if args.precompile_rts:
-        print('Precompiling runtimes...')
+        if args.verbose:
+            print('Precompiling runtimes...')
         igr = jug.Task(mig.precompile_runtime, args.input_gen_runtime, args.g, args.verbose)
         irr = jug.Task(mig.precompile_runtime, args.input_run_runtime, args.g, args.verbose)
         jug.barrier()
-        print('Done:')
+        if args.verbose:
+            print('Done:')
         args.input_gen_runtime = jug.task.value(igr)
         args.input_run_runtime = jug.task.value(irr)
-        print(args.input_gen_runtime)
-        print(args.input_run_runtime)
+        if args.verbose:
+            print(args.input_gen_runtime)
+            print(args.input_run_runtime)
 
-    print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
+    if args.verbose:
+        print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
     ds = load_dataset(args.dataset, split='train', streaming=True)
     os.makedirs(args.outdir, exist_ok=True)
 

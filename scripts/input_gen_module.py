@@ -124,8 +124,11 @@ class InputGenModule:
     def generate_inputs(self):
         try:
             self.generate_inputs_impl()
-        except:
-            self.print_err('Generating inputgen executables for', self.input_module, 'in', self.outdir, 'FAILED')
+        except e:
+            # Exception here means that something very wrong (killed by oom etc)
+            # happened and we should retry
+            self.print_err('Generating inputgen executables for', self.input_module, 'in', self.outdir, 'FAILED, to retry')
+            raise e
 
     def cleanup(self):
         if self.cleanup:
@@ -325,7 +328,6 @@ def handle_single_module(task, args):
     igm.cleanup()
 
     return igm.get_statistics()
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('InputGenModule')

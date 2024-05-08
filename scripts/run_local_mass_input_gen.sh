@@ -27,6 +27,11 @@ if [ "$JUG" == "run" ]; then
     JUG_RUN="jug-execute --will-cite"
     SCRIPT="$SCRIPT_DIR/jugfile.py"
     DASHDASH=--
+elif [ "$JUG" == "status" ]; then
+    JUG_RUN="jug status"
+    SCRIPT="$SCRIPT_DIR/jugfile.py"
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --get-jug-results"
+    DASHDASH=--
 elif [ "$JUG" == "results" ]; then
     JUG_RUN=
     SCRIPT="$SCRIPT_DIR/print_mig_jug_results.py"
@@ -68,5 +73,5 @@ function run() {
 if [ "$JUG" != "" ]; then
     run
 else
-    run > "$JOB_LOG"
+    run &> "$JOB_LOG"
 fi
