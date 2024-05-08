@@ -9,9 +9,12 @@ jug.init(jf, jf[:-3] + '.jugdata/')
 import mass_input_gen as mig
 import jugfile
 
-stats = jug.task.value([x for x in jugfile.results if x[1].can_load()])
+stats = jugfile.results
+stats = [x for x in jugfile.results if x[1].can_load()]
+stats = jug.task.value(stats)
+
 agg_stats = mig.aggregate_statistics([x[1] for x in stats])
 
-mig.pretty_print_statistics(jug.task.value(stats))
+mig.pretty_print_statistics(stats)
 print('Statistics: {}'.format(agg_stats))
 print('Len {}'.format(len(stats)))

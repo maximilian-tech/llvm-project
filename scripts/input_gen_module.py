@@ -126,9 +126,10 @@ class InputGenModule:
             self.generate_inputs_impl()
         except:
             self.print_err('Generating inputgen executables for', self.input_module, 'in', self.outdir, 'FAILED')
-        finally:
-            if self.cleanup:
-                shutil.rmtree(self.outdir)
+
+    def cleanup(self):
+        if self.cleanup:
+            shutil.rmtree(self.outdir)
 
     def generate_inputs_impl(self):
 
@@ -148,9 +149,7 @@ class InputGenModule:
             ]
             if self.g:
                 igargs.append('-g')
-            print('asdASDASDASDAS', igargs)
             self.print("input-gen args:", " ".join(igargs))
-            print('asdASDASDASDAS', igargs)
             subprocess.run(igargs,
                            check=True,
                            stdout=self.get_stdout(),
@@ -323,6 +322,7 @@ def handle_single_module(task, args):
     igm = input_gen_module.InputGenModule(**igm_args)
     igm.generate_inputs()
     igm.run_all_inputs()
+    igm.cleanup()
 
     return igm.get_statistics()
 

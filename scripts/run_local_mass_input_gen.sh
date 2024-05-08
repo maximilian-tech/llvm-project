@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 set -e
-set -x
 
 module load python/3.10.8
 
@@ -41,9 +40,12 @@ if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 
-echo tail -f "$JOB_LOG"
-echo vim "$JOB_LOG"
-echo less "$JOB_LOG"
+if [ "$JUG" == "" ]; then
+    echo "$JOB_LOG"
+    echo tail -f "$JOB_LOG"
+    echo vim "$JOB_LOG"
+    echo less "$JOB_LOG"
+fi
 
 . "$SCRIPT_DIR/enable.sh" "/usr/WS1/$USER/opt/input-gen-release"
 export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
