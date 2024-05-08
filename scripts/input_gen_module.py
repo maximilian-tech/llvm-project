@@ -140,6 +140,7 @@ class InputGenModule:
 
         self.print('Generating inputgen executables for', self.input_module, 'in', self.outdir)
 
+        instrumentation_failed = False
         try:
 
             igargs = [
@@ -159,6 +160,7 @@ class InputGenModule:
                            stderr=self.get_stderr())
         except Exception:
             self.print('Failed to instrument')
+            instrumentation_failed = True
 
         available_functions_file_name = os.path.join(self.outdir, 'available_functions')
         try:
@@ -178,6 +180,9 @@ class InputGenModule:
 
                 func = Function(fname, self.verbose)
                 self.functions.append(func)
+
+                if instrumentation_failed:
+                    continue
 
                 input_gen_executable = os.path.join(
                     self.outdir, 'input-gen.module.generate.a.out')
