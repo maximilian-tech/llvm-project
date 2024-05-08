@@ -37,7 +37,7 @@ elif [ "$JUG" == "results" ]; then
     SCRIPT="$SCRIPT_DIR/print_mig_jug_results.py"
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --get-jug-results"
 elif [ "$JUG" != "" ]; then
-    echo Invalid JUG option >2
+    echo Invalid JUG option 1>&2
     exit 1
 fi
 
