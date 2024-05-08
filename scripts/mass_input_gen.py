@@ -111,7 +111,6 @@ if __name__ == '__main__':
 
     global_outdir = args.outdir
     igm_args = vars(args)
-    ds = ds.skip(args.start)
     with multiprocessing.Pool(args.num_procs) as pool:
         tasks = range(args.start, args.end)
         stats = pool.imap(handle_single_module_i, tasks, chunksize=1)
