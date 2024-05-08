@@ -49,6 +49,12 @@ def pretty_print_statistics(stats):
         print('{}: {},'.format(k, v))
     print('}')
 
+def aggregate_statistics(stats):
+    empty = input_gen_module.InputGenModule().get_empty_statistics()
+    agg_stats = functools.reduce(
+        input_gen_module.InputGenModule().add_statistics, stats, empty)
+    return agg_stats
+
 def handle_single_module_i(i):
     ds_i = ds.skip(i)
     module = list(ds_i.take(1))[0]
@@ -107,12 +113,10 @@ if __name__ == '__main__':
     igm_args = vars(args)
     ds = ds.skip(args.start)
     with multiprocessing.Pool(args.num_procs) as pool:
-        tasks = list(zip(range(args.start, args.end), ds))
-        stats = pool.imap(handle_single_module, tasks, chunksize=1)
-        empty = input_gen_module.InputGenModule().get_empty_statistics()
+        tasks = range(args.start, args.end)
+        stats = pool.imap(handle_single_module_i, tasks, chunksize=1)
         stats = list(stats)
-        agg_stats = functools.reduce(
-            input_gen_module.InputGenModule().add_statistics, stats, empty)
+        agg_stats = aggregate_statistics(stats)
 
         pretty_print_statistics(list(zip(range(args.start, args.end), stats)))
 

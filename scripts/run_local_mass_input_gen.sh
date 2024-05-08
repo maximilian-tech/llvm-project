@@ -37,7 +37,7 @@ elif [ "$JUG" != "" ]; then
     exit 1
 fi
 
-if [ "$NOCLEANUP" != "" ]; then
+if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 

@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import json
+import shutil
 
 def add_option_args(parser):
     parser.add_argument('--input-gen-num', type=int, default=1)
@@ -124,7 +125,7 @@ class InputGenModule:
         try:
             self.generate_inputs_impl()
         except:
-            self.printerr('Generating inputgen executables for', self.input_module, 'in', self.outdir, 'FAILED')
+            self.print_err('Generating inputgen executables for', self.input_module, 'in', self.outdir, 'FAILED')
         finally:
             if self.cleanup:
                 shutil.rmtree(self.outdir)
@@ -147,7 +148,9 @@ class InputGenModule:
             ]
             if self.g:
                 igargs.append('-g')
+            print('asdASDASDASDAS', igargs)
             self.print("input-gen args:", " ".join(igargs))
+            print('asdASDASDASDAS', igargs)
             subprocess.run(igargs,
                            check=True,
                            stdout=self.get_stdout(),
@@ -166,7 +169,7 @@ class InputGenModule:
             for line in available_functions_file.read().splitlines():
                 splitline = line.split(' ')
                 if len(splitline) != 2:
-                    printerr('Available functions file line {} did not split in two'.format(line), file=sys.stderr)
+                    print_err('Available functions file line {} did not split in two'.format(line), file=sys.stderr)
                     raise Exception
                 fid = splitline[0]
                 fname = splitline[1]
