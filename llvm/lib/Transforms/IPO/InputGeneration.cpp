@@ -16,6 +16,7 @@
 #include "llvm/Transforms/IPO/InputGeneration.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
 
 #include "llvm/ADT/EnumeratedArray.h"
@@ -387,7 +388,9 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
   if (!Fn.getCallee()) {
     LLVM_DEBUG(dbgs() << "No memory access callback for " << *AccessTy << "\n");
-    IRB.CreateUnreachable();
+    // TODO this should be easy enough to support - just 'load' a bunch of
+    // int8's
+    IRB.CreateIntrinsic(VoidTy, Intrinsic::trap, {});
   } else {
     IRB.CreateCall(Fn, Args);
   }
@@ -843,7 +846,7 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
     FunctionCallee Fn = CC[T];
     if (!Fn.getCallee()) {
       LLVM_DEBUG(dbgs() << "No value gen callback for " << *T << "\n");
-      IRB.CreateUnreachable();
+      IRB.CreateIntrinsic(VoidTy, Intrinsic::trap, {});
       return UndefValue::get(T);
     } else {
       return IRB.CreateCall(Fn, {});
