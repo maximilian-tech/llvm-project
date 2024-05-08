@@ -456,6 +456,7 @@ static void renameGlobals(Module &M) {
     X.setComdat(nullptr);
     if (shouldPreserveGV(X))
       continue;
+    X.setLinkage(GlobalVariable::InternalLinkage);
     Rename(X);
   }
   for (auto &X : M.functions()) {
