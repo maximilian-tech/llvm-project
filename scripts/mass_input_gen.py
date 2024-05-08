@@ -14,11 +14,11 @@ import input_gen_module
 
 def precompile_runtimes(args):
     print('Precompiling runtimes...')
-    args.input_gen_runtime = precompile_runtime(args.input_gen_runtime, args.g)
-    args.input_run_runtime = precompile_runtime(args.input_run_runtime, args.g)
+    args.input_gen_runtime = precompile_runtime(args.input_gen_runtime, args.g, args.verbose)
+    args.input_run_runtime = precompile_runtime(args.input_run_runtime, args.g, args.verbose)
     print('Done.')
 
-def precompile_runtime(fname, debug):
+def precompile_runtime(fname, debug, verbose):
     if (fname.endswith('.c') or
         fname.endswith('.cpp') or
         fname.endswith('.cxx')):
@@ -32,7 +32,7 @@ def precompile_runtime(fname, debug):
             compargs.append('-O3')
             compargs.append('-DNDEBUG')
 
-        if args.verbose:
+        if verbose:
             print('Comp args:', ' '.join(compargs))
 
         subprocess.run(
@@ -85,7 +85,7 @@ def add_option_args(parser):
     parser.add_argument('--no-precompile-rts',
                         dest='precompile_rts', action='store_false')
     parser.set_defaults(precompile_rts=True)
-    parser.add_argument('--report-jug-results', action='store_true')
+    parser.add_argument('--get-jug-results', action='store_true')
 
     input_gen_module.add_option_args(parser)
 
@@ -117,35 +117,3 @@ if __name__ == '__main__':
         pretty_print_statistics(list(zip(range(args.start, args.end), stats)))
 
         print('Statistics: {}'.format(agg_stats))
-
-if jug.is_jug_running():
-    parser = argparse.ArgumentParser('MassInputGenJug')
-    add_option_args(parser)
-    args = parser.parse_args()
-
-    if args.precompile_rts:
-        print('Precompiling runtimes...')
-        igr = jug.Task(precompile_runtime, args.input_gen_runtime, args.g)
-        irr = jug.Task(precompile_runtime, args.input_run_runtime, args.g)
-        jug.barrier()
-        print('Done:')
-        args.input_gen_runtime = jug.task.value(igr)
-        args.input_run_runtime = jug.task.value(irr)
-        print(args.input_gen_runtime)
-        print(args.input_run_runtime)
-
-    ds = load_dataset(args.dataset, split='train', streaming=True)
-
-    os.makedirs(args.outdir, exist_ok=True)
-
-    print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
-
-    results = []
-    for i in range(args.start, args.end):
-        results.append(jug.Task(handle_single_module_i, i))
-    results = list(zip(range(args.start, args.end), results))
-
-    if args.report_jug_results:
-        pretty_print_statistics(jug.task.value(results))
-    else:
-        print('Done')

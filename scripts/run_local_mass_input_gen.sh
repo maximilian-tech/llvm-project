@@ -21,8 +21,24 @@ mkdir -p "$JOB_LOG_DIR"
 JOB_NAME="compile-inputgen"
 JOB_LOG="$JOB_LOG_DIR/job-$JOB_NAME.main.out"
 
-if [ "$JUG_RUN" != "" ]; then
+SCRIPT="$SCRIPT_DIR/mass_input_gen.py"
+
+JUG_RUN=
+if [ "$JUG" == "run" ]; then
+    JUG_RUN="jug-execute --will-cite"
+    SCRIPT="$SCRIPT_DIR/jugfile.py"
     DASHDASH=--
+elif [ "$JUG" == "results" ]; then
+    JUG_RUN=
+    SCRIPT="$SCRIPT_DIR/print_mig_jug_results.py"
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --get-jug-results"
+elif [ "$JUG" != "" ]; then
+    echo Invalid JUG option >2
+    exit 1
+fi
+
+if [ "$NOCLEANUP" != "" ]; then
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 
 echo tail -f "$JOB_LOG"
@@ -33,7 +49,7 @@ echo less "$JOB_LOG"
 export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
 
 function run() {
-    $JUG_RUN "$SCRIPT_DIR/mass_input_gen.py" $DASHDASH \
+    $JUG_RUN "$SCRIPT" $DASHDASH \
         --dataset "/p/vast1/LExperts/ComPile-Public" \
         --outdir "/l/ssd/$USER/compile-input-gen-out/" \
         --start "$START" \
@@ -47,7 +63,7 @@ function run() {
         --input-run-timeout 5 \
         --num-procs="$NUM_CPU" $ADDITIONAL_FLAGS
 }
-if [ "$JUG_RUN" != "" ]; then
+if [ "$JUG" != "" ]; then
     run
 else
     run > "$JOB_LOG"

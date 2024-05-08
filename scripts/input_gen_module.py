@@ -19,6 +19,7 @@ def add_option_args(parser):
     parser.add_argument('--no-verbose', dest='verbose', action='store_false')
     parser.add_argument('-g', action='store_true')
     parser.set_defaults(verbose=False)
+    parser.add_argument('--cleanup', action='store_true')
 
 class Function:
     def __init__(self, name, verbose):
@@ -103,6 +104,10 @@ class InputGenModule:
         if self.verbose:
             print(*args, **kwargs)
 
+    def print_err(self, *args, **kwargs):
+        if self.verbose:
+            print(*args, **kwargs, file=sys.stderr)
+
     def get_stderr(self):
         if self.verbose:
             return None
@@ -116,6 +121,15 @@ class InputGenModule:
             return subprocess.DEVNULL
 
     def generate_inputs(self):
+        try:
+            self.generate_inputs_impl()
+        except:
+            self.printerr('Generating inputgen executables for', self.input_module, 'in', self.outdir, 'FAILED')
+        finally:
+            if self.cleanup:
+                shutil.rmtree(self.outdir)
+
+    def generate_inputs_impl(self):
 
         os.makedirs(self.outdir, exist_ok=True)
 
@@ -147,11 +161,13 @@ class InputGenModule:
         except IOError as e:
             self.print("Could not open available functions file:", e)
             self.print("input-gen args:", " ".join(igargs))
-            raise(e)
+            raise e
         else:
             for line in available_functions_file.read().splitlines():
                 splitline = line.split(' ')
-                assert(len(splitline) == 2)
+                if len(splitline) != 2:
+                    printerr('Available functions file line {} did not split in two'.format(line), file=sys.stderr)
+                    raise Exception
                 fid = splitline[0]
                 fname = splitline[1]
 
@@ -246,10 +262,10 @@ class InputGenModule:
                                 self.print("Killed.")
             available_functions_file.close()
 
-
-        available_functions_pickle_file_name = os.path.join(self.outdir, 'available_functions.json')
-        with open(available_functions_pickle_file_name, 'w') as available_functions_pickle_file:
-            available_functions_pickle_file.write(json.dumps(self.functions, default=vars))
+        if not self.cleanup:
+            available_functions_pickle_file_name = os.path.join(self.outdir, 'available_functions.json')
+            with open(available_functions_pickle_file_name, 'w') as available_functions_pickle_file:
+                available_functions_pickle_file.write(json.dumps(self.functions, default=vars))
 
     def run_all_inputs(self):
         for func in self.functions:
