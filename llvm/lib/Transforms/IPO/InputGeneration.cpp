@@ -223,6 +223,7 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
         // Masked store has an initial operand for the value.
         OpOffset = 1;
         Access.AccessTy = CI->getArgOperand(0)->getType();
+        Access.V = CI->getArgOperand(0);
         Access.Kind = InterestingMemoryAccess::WRITE;
       } else {
         Access.AccessTy = CI->getType();
@@ -273,11 +274,6 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
   return Access;
 }
 
-void InputGenInstrumenter::instrumentMaskedLoadOrStore(
-    const InterestingMemoryAccess &Access, const DataLayout &DL) {
-  llvm_unreachable("Not implemented yet");
-}
-
 void InputGenInstrumenter::instrumentMop(const InterestingMemoryAccess &Access,
                                          const DataLayout &DL) {
 
@@ -287,21 +283,80 @@ void InputGenInstrumenter::instrumentMop(const InterestingMemoryAccess &Access,
     instrumentAddress(Access, DL);
 }
 
-void InputGenInstrumenter::instrumentAddress(
-    const InterestingMemoryAccess &Access, const DataLayout &DL) {
-  IRBuilder<> IRB(Access.I);
-  IRB.SetCurrentDebugLocation(Access.I->getDebugLoc());
+static Value *igGetUnderlyingObject(Value *Addr) {
   SmallVector<const Value *, 4> Objects;
-  getUnderlyingObjects(Access.Addr, Objects, /*LI=*/nullptr,
+  getUnderlyingObjects(Addr, Objects, /*LI=*/nullptr,
                        /*MaxLookup=*/12);
 
   Value *Object = Objects.size() == 1
                       ? const_cast<Value *>(Objects[0])
-                      : getUnderlyingObject(Access.Addr, /*MaxLookup=*/12);
+                      : getUnderlyingObject(Addr, /*MaxLookup=*/12);
+  return Object;
+}
 
+void InputGenInstrumenter::instrumentMaskedLoadOrStore(
+    const InterestingMemoryAccess &Access, const DataLayout &DL) {
+  auto *CI = dyn_cast<CallInst>(Access.I);
+  if (!CI)
+    llvm_unreachable("Unexpected");
+  auto *F = CI->getCalledFunction();
+  if (!F)
+    llvm_unreachable("Unexpected");
+  if (!(F->getIntrinsicID() == Intrinsic::masked_load ||
+        F->getIntrinsicID() == Intrinsic::masked_store))
+    llvm_unreachable("Unexpected");
+
+  Value *Object = igGetUnderlyingObject(Access.Addr);
   if (isa<AllocaInst>(Object))
     return;
-  if (isa<GlobalVariable>(Object))
+
+  Value *Mask = nullptr;
+  if (F->getIntrinsicID() == Intrinsic::masked_load)
+    Mask = Access.I->getOperand(2);
+  if (F->getIntrinsicID() == Intrinsic::masked_store)
+    Mask = Access.I->getOperand(3);
+  assert(Mask);
+
+  auto *VT = cast<VectorType>(Access.AccessTy);
+  auto *ElTy = VT->getElementType();
+  auto *MaskTy = cast<VectorType>(Mask->getType());
+  if (MaskTy->getElementCount().isScalable())
+    llvm_unreachable("Scalable vectors unsupported.");
+
+  SplitBlockAndInsertForEachLane(
+      MaskTy->getElementCount(), IntegerType::getInt64Ty(VT->getContext()),
+      Access.I, [&](IRBuilderBase &IRB, Value *Idx) {
+        Value *Cond = IRB.CreateExtractElement(Mask, Idx);
+        Instruction *NewTerm = SplitBlockAndInsertIfThen(
+            Cond, IRB.GetInsertBlock()->getTerminator(), /*Unreachable=*/false);
+        IRB.SetInsertPoint(NewTerm);
+        Value *GEP = IRB.CreateGEP(Access.AccessTy, Access.Addr, {Idx});
+        Value *V = nullptr;
+        switch (Access.Kind) {
+        case InterestingMemoryAccess::READ:
+          assert(Access.V == nullptr);
+          break;
+        case InterestingMemoryAccess::WRITE:
+          assert(Access.V != nullptr);
+          V = IRB.CreateExtractElement(Access.V, Idx);
+          break;
+        case InterestingMemoryAccess::READ_THEN_WRITE:
+          // Unimplemented, but we abort() in the runtime
+          break;
+        }
+        int32_t AllocSize = DL.getTypeAllocSize(ElTy);
+        emitMemoryAccessCallback(IRB, GEP, V, ElTy, AllocSize, Access.Kind,
+                                 Object);
+      });
+}
+
+void InputGenInstrumenter::instrumentAddress(
+    const InterestingMemoryAccess &Access, const DataLayout &DL) {
+  IRBuilder<> IRB(Access.I);
+  IRB.SetCurrentDebugLocation(Access.I->getDebugLoc());
+
+  Value *Object = igGetUnderlyingObject(Access.Addr);
+  if (isa<AllocaInst>(Object))
     return;
 
   std::function<void(Type * TheType, Value * TheAddr, Value * TheValue)>
@@ -321,6 +376,7 @@ void InputGenInstrumenter::instrumentAddress(
           V = IRB.CreateExtractValue(TheValue, {It});
           break;
         case InterestingMemoryAccess::READ_THEN_WRITE:
+          // Unimplemented, but we abort() in the runtime
           break;
         }
         HandleType(ElTy, GEP, V);
@@ -341,6 +397,7 @@ void InputGenInstrumenter::instrumentAddress(
             V = IRB.CreateExtractElement(TheValue, IRB.getInt64(It));
             break;
           case InterestingMemoryAccess::READ_THEN_WRITE:
+            // Unimplemented, but we abort() in the runtime
             break;
           }
           HandleType(ElTy, GEP, V);
