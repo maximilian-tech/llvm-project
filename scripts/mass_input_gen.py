@@ -58,25 +58,7 @@ def aggregate_statistics(stats):
 def handle_single_module_i(i):
     ds_i = ds.skip(i)
     module = list(ds_i.take(1))[0]
-    return handle_single_module((i, module), args)
-
-def handle_single_module(task, args):
-    (i, module) = task
-
-    global_outdir = args.outdir
-    igm_args = vars(args)
-    igm_args['outdir'] = os.path.join(global_outdir, str(i))
-    os.makedirs(igm_args['outdir'], exist_ok=True)
-    with open(igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
-        module_file.write(module['content'])
-        module_file.flush()
-    igm_args['input_module'] = module_file.name
-
-    igm = input_gen_module.InputGenModule(**igm_args)
-    igm.generate_inputs()
-    igm.run_all_inputs()
-
-    return igm.get_statistics()
+    return input_gen_module.handle_single_module((i, module), args)
 
 def add_option_args(parser):
     parser.add_argument('--dataset', default='llvm-ml/ComPile')

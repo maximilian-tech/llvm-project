@@ -130,7 +130,7 @@ class InputGenModule:
             self.print_err('Generating inputgen executables for', self.input_module, 'in', self.outdir, 'FAILED, to retry')
             raise e
 
-    def cleanup(self):
+    def cleanup_outdir(self):
         if self.cleanup:
             shutil.rmtree(self.outdir)
 
@@ -327,10 +327,10 @@ def handle_single_module(task, args):
         module_file.flush()
     igm_args['input_module'] = module_file.name
 
-    igm = input_gen_module.InputGenModule(**igm_args)
+    igm = InputGenModule(**igm_args)
     igm.generate_inputs()
     igm.run_all_inputs()
-    igm.cleanup()
+    igm.cleanup_outdir()
 
     return igm.get_statistics()
 
@@ -347,4 +347,6 @@ if __name__ == '__main__':
     IGM = InputGenModule(**vars(args))
     IGM.generate_inputs()
     IGM.run_all_inputs()
+    IGM.cleanup_outdir()
+
     print(IGM.get_statistics())

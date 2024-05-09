@@ -11,11 +11,12 @@ from datasets import load_dataset
 import jug
 
 import mass_input_gen as mig
+import input_gen_module as igm
 
 def handle_single_module_i(i):
     ds_i = ds.skip(i)
     module = list(ds_i.take(1))[0]
-    return mig.handle_single_module((i, module), args)
+    return igm.handle_single_module((i, module), args)
 
 parser = argparse.ArgumentParser('MassInputGenJug')
 mig.add_option_args(parser)
