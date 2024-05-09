@@ -1,44 +1,46 @@
-# The LLVM Compiler Infrastructure
+# Input-gen useful commands
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/llvm/llvm-project/badge)](https://securityscorecards.dev/viewer/?uri=github.com/llvm/llvm-project)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8273/badge)](https://www.bestpractices.dev/projects/8273)
-[![libc++](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml/badge.svg?branch=main&event=schedule)](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml?query=event%3Aschedule)
+## Mass input gen
 
-Welcome to the LLVM project!
+To generate inputs:
 
-This repository contains the source code for LLVM, a toolkit for the
-construction of highly optimized compilers, optimizers, and run-time
-environments.
+Single cpu:
+``` sh
+JUG=run START=0 END=500000 ./scripts/run_local_mass_input_gen.sh
+```
 
-The LLVM project has multiple components. The core of the project is
-itself called "LLVM". This contains all of the tools, libraries, and header
-files needed to process intermediate representations and convert them into
-object files. Tools include an assembler, disassembler, bitcode analyzer, and
-bitcode optimizer.
+Multi-cpu:
+``` sh
+for i in $(seq 0 40); do
+    JUG=run START=0 END=500000 ./scripts/run_local_mass_input_gen.sh &
+done
+```
 
-C-like languages use the [Clang](https://clang.llvm.org/) frontend. This
-component compiles C, C++, Objective-C, and Objective-C++ code into LLVM bitcode
--- and from there into object files, using LLVM.
+Multi-node:
+``` sh
+JUG=run START=0 END=500000 flux submit -x -N 10 --tasks-per-node 40 -t 5h ./scripts/run_local_mass_input_gen.sh
+```
 
-Other components include:
-the [libc++ C++ standard library](https://libcxx.llvm.org),
-the [LLD linker](https://lld.llvm.org), and more.
+The results are stored in the scripts/*jugdata directory - that needs to be on an NFS for this to work across nodes.
 
-## Getting the Source Code and Building LLVM
+To see the results at any time (even while running or partially completed):
+``` sh
+JUG=results START=0 END=7000 ./scripts/run_local_mass_input_gen.sh
+```
 
-Consult the
-[Getting Started with LLVM](https://llvm.org/docs/GettingStarted.html#getting-the-source-code-and-building-llvm)
-page for information on building and running LLVM.
+## Debugging/exploring
 
-For information on how to contribute to the LLVM project, please take a look at
-the [Contributing to LLVM](https://llvm.org/docs/Contributing.html) guide.
+To test out a single module locally:
+``` sh
+ADDITIONAL_FLAGS="--verbose -g" NOCLEANUP=1 SINGLE=18450 START=0 END=200000 ./scripts/run_local_mass_input_gen.sh
+```
 
-## Getting in touch
+This will print out all intermediate commands ran and what failed, etc.
 
-Join the [LLVM Discourse forums](https://discourse.llvm.org/), [Discord
-chat](https://discord.gg/xS7Z362),
-[LLVM Office Hours](https://llvm.org/docs/GettingInvolved.html#office-hours) or
-[Regular sync-ups](https://llvm.org/docs/GettingInvolved.html#online-sync-ups).
+To debug the input gen/run runtimes use VERBOSE=1, e.g.:
+``` sh
+VERBOSE=1 /l/ssd/$USER/compile-input-gen-out/12374/input-gen.module.generate.a.out /l/ssd/$USER/compile-input-gen-out/12374/input-gen.32.inputs 3 4 _ZN25vnl_symmetric_eigensystemIdE5solveERK10vnl_vectorIdEPS2_ 32
+```
 
-The LLVM project has adopted a [code of conduct](https://llvm.org/docs/CodeOfConduct.html) for
-participants to all modes of communication within the project.
+
+There are some hardcoded paths to the llvm installation dirs etc which need to be edited in the `./scripts/run_local_mass_input_gen.sh` script.
