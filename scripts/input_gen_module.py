@@ -7,6 +7,7 @@ import sys
 import time
 import json
 import shutil
+import copy
 
 def add_option_args(parser):
     parser.add_argument('--input-gen-num', type=int, default=1)
@@ -106,8 +107,7 @@ class InputGenModule:
             print(*args, **kwargs)
 
     def print_err(self, *args, **kwargs):
-        if self.verbose:
-            print(*args, **kwargs, file=sys.stderr)
+        print(*args, **kwargs, file=sys.stderr)
 
     def get_stderr(self):
         if self.verbose:
@@ -124,7 +124,7 @@ class InputGenModule:
     def generate_inputs(self):
         try:
             self.generate_inputs_impl()
-        except e:
+        except Exception as e:
             # Exception here means that something very wrong (killed by oom etc)
             # happened and we should retry
             self.print_err('Generating inputgen executables for', self.input_module, 'in', self.outdir, 'FAILED, to retry')
@@ -158,7 +158,7 @@ class InputGenModule:
                            check=True,
                            stdout=self.get_stdout(),
                            stderr=self.get_stderr())
-        except Exception:
+        except:
             self.print('Failed to instrument')
             instrumentation_failed = True
 
@@ -173,7 +173,7 @@ class InputGenModule:
             for line in available_functions_file.read().splitlines():
                 splitline = line.split(' ')
                 if len(splitline) != 2:
-                    print_err('Available functions file line {} did not split in two'.format(line), file=sys.stderr)
+                    self.print_err('Available functions file line {} did not split in two'.format(line))
                     raise Exception
                 fid = splitline[0]
                 fname = splitline[1]
@@ -319,7 +319,7 @@ def handle_single_module(task, args):
     (i, module) = task
 
     global_outdir = args.outdir
-    igm_args = vars(args)
+    igm_args = copy.deepcopy(vars(args))
     igm_args['outdir'] = os.path.join(global_outdir, str(i))
     os.makedirs(igm_args['outdir'], exist_ok=True)
     with open(igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
