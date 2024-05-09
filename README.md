@@ -32,7 +32,7 @@ JUG=results START=0 END=7000 ./scripts/run_local_mass_input_gen.sh
 
 To test out a single module locally:
 ``` sh
-ADDITIONAL_FLAGS="--verbose -g" NOCLEANUP=1 SINGLE=18450 START=0 END=200000 ./scripts/run_local_mass_input_gen.sh
+ADDITIONAL_FLAGS="--verbose -g" NOCLEANUP=1 SINGLE=18450 ./scripts/run_local_mass_input_gen.sh
 ```
 
 This will print out all intermediate commands ran and what failed, etc.
