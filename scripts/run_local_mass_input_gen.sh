@@ -22,7 +22,6 @@ JOB_LOG="$JOB_LOG_DIR/job-$JOB_NAME.main.out"
 
 SCRIPT="$SCRIPT_DIR/mass_input_gen.py"
 
-JUG_RUN=
 if [ "$JUG" == "run" ]; then
     JUG_RUN="jug-execute --will-cite"
     SCRIPT="$SCRIPT_DIR/jugfile.py"
