@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import tempfile
 import subprocess
 import argparse
 import os
@@ -122,6 +123,11 @@ class InputGenModule:
             return subprocess.DEVNULL
 
     def generate_inputs(self):
+
+        if self.cleanup:
+            self.tempdir = tempfile.TemporaryDirectory()
+            self.outdir = self.tempdir.name
+
         try:
             self.generate_inputs_impl()
         except Exception as e:
@@ -132,7 +138,8 @@ class InputGenModule:
 
     def cleanup_outdir(self):
         if self.cleanup:
-            shutil.rmtree(self.outdir)
+            assert(self.tempdir is not None)
+            self.tempdir.cleanup()
 
     def generate_inputs_impl(self):
 
@@ -331,6 +338,12 @@ def handle_single_module(task, args):
     igm.generate_inputs()
     igm.run_all_inputs()
     igm.cleanup_outdir()
+
+    if args.cleanup:
+        try:
+            os.rmdir(igm_args['outdir'])
+        except:
+            pass
 
     return igm.get_statistics()
 
