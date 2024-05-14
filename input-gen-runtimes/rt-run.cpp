@@ -165,7 +165,7 @@ int main(int argc, char **argv) {
     for (uintptr_t J = 0; J < NumPtrs; J++) {
       auto PtrOffset = readV<intptr_t>(Input);
       VoidPtrTy *PtrLoc = reinterpret_cast<VoidPtrTy *>(
-          Obj.Start + Obj.OutputOffset + PtrOffset);
+          Obj.Start - Obj.OutputOffset + PtrOffset);
       RelocatePointer(PtrLoc, "Obj");
     }
   }

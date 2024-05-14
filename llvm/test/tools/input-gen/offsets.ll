@@ -1,5 +1,13 @@
 ; RUN: mkdir -p %t/function-wise/
 
+; RUN: (input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function positive_offset_ptr && %t/function-wise/input-gen.function.positive_offset_ptr.generate.a.out %t/function-wise/ 0 1 && %t/function-wise/input-gen.function.positive_offset_ptr.run.a.out %t/function-wise/input-gen.function.positive_offset_ptr.generate.a.out.input.0.bin) | FileCheck %s --check-prefix=POSITIVE_PTR
+; POSITIVE_PTR: OUTPUT [[out:.*]]
+; POSITIVE_PTR: OUTPUT [[out]]
+
+; RUN: (input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function negative_offset_ptr && %t/function-wise/input-gen.function.negative_offset_ptr.generate.a.out %t/function-wise/ 0 1 && %t/function-wise/input-gen.function.negative_offset_ptr.run.a.out %t/function-wise/input-gen.function.negative_offset_ptr.generate.a.out.input.0.bin) | FileCheck %s --check-prefix=NEGATIVE_PTR
+; NEGATIVE_PTR: OUTPUT [[out:.*]]
+; NEGATIVE_PTR: OUTPUT [[out]]
+
 ; RUN: (input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function positive_offset && %t/function-wise/input-gen.function.positive_offset.generate.a.out %t/function-wise/ 0 1 && %t/function-wise/input-gen.function.positive_offset.run.a.out %t/function-wise/input-gen.function.positive_offset.generate.a.out.input.0.bin) | FileCheck %s --check-prefix=POSITIVE
 ; POSITIVE: OUTPUT [[out:.*]]
 ; POSITIVE: OUTPUT [[out]]
@@ -16,6 +24,28 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 target triple = "x86_64-unknown-linux-gnu"
 
 @.str = private unnamed_addr constant [11 x i8] c"OUTPUT %d\0A\00", align 1
+
+; Function Attrs: nofree nounwind uwtable
+define dso_local noundef i32 @positive_offset_ptr(ptr nocapture noundef readonly %ptr) local_unnamed_addr #0 {
+entry:
+  %add.ptr = getelementptr inbounds i8, ptr %ptr, i64 134
+  %p = load ptr, ptr %add.ptr
+  %ptr.offset = getelementptr inbounds i8, ptr %p, i64 52
+  %0 = load i32, ptr %ptr.offset, align 4, !tbaa !5
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %0)
+  ret i32 %0
+}
+
+; Function Attrs: nofree nounwind uwtable
+define dso_local noundef i32 @negative_offset_ptr(ptr nocapture noundef readonly %ptr) local_unnamed_addr #0 {
+entry:
+  %add.ptr = getelementptr inbounds i8, ptr %ptr, i64 -48
+  %p = load ptr, ptr %add.ptr
+  %ptr.offset = getelementptr inbounds i8, ptr %p, i64 -276
+  %0 = load i32, ptr %ptr.offset, align 4, !tbaa !5
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %0)
+  ret i32 %0
+}
 
 ; Function Attrs: nofree nounwind uwtable
 define dso_local noundef i32 @positive_offset(ptr nocapture noundef readonly %ptr) local_unnamed_addr #0 {
