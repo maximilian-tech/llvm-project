@@ -178,7 +178,9 @@ class InputGenModule:
             raise e
         else:
             for line in available_functions_file.read().splitlines():
-                splitline = line.split(' ')
+                # Apparently llvm function names can have spaces in them so
+                # split only at the first space
+                splitline = line.split(' ', 1)
                 if len(splitline) != 2:
                     self.print_err('Available functions file line {} did not split in two'.format(line))
                     raise Exception
