@@ -20,6 +20,7 @@ def handle_single_module_i(i):
 
 parser = argparse.ArgumentParser('MassInputGenJug')
 mig.add_option_args(parser)
+parser.add_argument('--invalidate-instrumentation-failures', action='store_true')
 args = parser.parse_args()
 
 if not args.get_jug_results:
