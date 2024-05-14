@@ -513,7 +513,8 @@ static void renameGlobals(Module &M) {
     X.setComdat(nullptr);
     if (shouldPreserveGV(X))
       continue;
-    X.setLinkage(GlobalVariable::InternalLinkage);
+    if (X.getValueType()->isSized())
+      X.setLinkage(GlobalVariable::InternalLinkage);
     Rename(X);
   }
   for (auto &X : M.functions()) {
@@ -740,6 +741,11 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
   for (GlobalVariable &GV : M.globals()) {
     if (shouldPreserveGV(GV))
       continue;
+    if (!GV.getValueType()->isSized()) {
+      assert(GV.hasExternalLinkage());
+      GV.setLinkage(GlobalValue::ExternalWeakLinkage);
+      continue;
+    }
     if (GV.hasExternalLinkage() || !GV.isConstant())
       MaybeExtInitializedGlobals.push_back({&GV, nullptr});
     if (!GV.hasExternalLinkage())
