@@ -133,8 +133,10 @@ bool isLibCGlobal(StringRef Name) {
       .Default(false);
 }
 
-bool shouldPreserveGV(GlobalVariable &GV) {
-  return isLandingPadType(GV) || isLibCGlobal(GV.getName());
+bool shouldNotStubGV(GlobalVariable &GV) { return isLibCGlobal(GV.getName()); }
+
+bool shouldPreserveGVName(GlobalVariable &GV) {
+  return isLandingPadType(GV) || shouldNotStubGV(GV);
 }
 
 bool isPersonalityFunction(Function &F) {
@@ -146,15 +148,17 @@ bool isPersonalityFunction(Function &F) {
   });
 }
 
-bool isAllowedExternFunc(Function &F, TargetLibraryInfo &TLI) {
-  return isPersonalityFunction(F) ||
-         StringSwitch<bool>(F.getName()).Case("printf", true).Default(false);
-
+bool shouldNotStubFunc(Function &F, TargetLibraryInfo &TLI) {
   // TODO Maybe provide a way for the user to specify the allowed external
   // functions
-  LibFunc LF;
-  if (TLI.getLibFunc(F, LF) && TLI.has(LF))
-    return true;
+  return StringSwitch<bool>(F.getName())
+      .Case("printf", true)
+      .Case("__cxa_throw", true)
+      .Default(false);
+}
+
+bool shouldPreserveFuncName(Function &F, TargetLibraryInfo &TLI) {
+  return isPersonalityFunction(F) || shouldNotStubFunc(F, TLI);
 }
 
 std::string getTypeName(const Type *Ty) {
@@ -528,7 +532,7 @@ static void renameGlobals(Module &M) {
   };
   for (auto &X : M.globals()) {
     X.setComdat(nullptr);
-    if (shouldPreserveGV(X))
+    if (shouldPreserveGVName(X))
       continue;
     if (X.getValueType()->isSized())
       X.setLinkage(GlobalVariable::InternalLinkage);
@@ -729,16 +733,16 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
     if (F.getName().starts_with(Prefix))
       continue;
 
-    if (isAllowedExternFunc(F, TLI))
+    if (shouldNotStubFunc(F, TLI))
       continue;
 
+    if (!shouldPreserveFuncName(F, TLI))
+      F.setName("__inputgen_renamed_" + F.getName());
     F.setLinkage(GlobalValue::WeakAnyLinkage);
-    F.setName("__inputgen_renamed_" + F.getName());
+
     auto *EntryBB = BasicBlock::Create(*Ctx, "entry", &F);
 
     IRBuilder<> IRB(EntryBB);
-    //  IRB.SetCurrentDebugLocation();
-
     auto *RTy = F.getReturnType();
     if (RTy->isVoidTy())
       IRB.CreateRetVoid();
@@ -756,7 +760,7 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
     GVDtor->eraseFromParent();
 
   for (GlobalVariable &GV : M.globals()) {
-    if (shouldPreserveGV(GV))
+    if (shouldNotStubGV(GV))
       continue;
     if (!GV.getValueType()->isSized()) {
       assert(GV.hasExternalLinkage());
@@ -768,7 +772,7 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
     if (!GV.hasExternalLinkage())
       continue;
     GV.setConstant(false);
-    GV.setLinkage(GlobalValue::CommonLinkage);
+    GV.setLinkage(GlobalValue::WeakAnyLinkage);
     GV.setInitializer(Constant::getNullValue(GV.getValueType()));
   }
 
