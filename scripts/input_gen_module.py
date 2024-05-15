@@ -332,7 +332,7 @@ def handle_single_module(task, args):
     igm_args['outdir'] = os.path.join(global_outdir, str(i))
     os.makedirs(igm_args['outdir'], exist_ok=True)
     with open(igm_args['outdir'] +"/mod.bc", 'wb') as module_file:
-        module_file.write(module['content'])
+        module_file.write(module)
         module_file.flush()
     igm_args['input_module'] = module_file.name
 

@@ -10,7 +10,7 @@ import functools
 from datasets import load_dataset
 import jug
 
-import input_gen_module
+import input_gen_module as igm
 
 def precompile_runtimes(args):
     print('Precompiling runtimes...')
@@ -42,23 +42,43 @@ def precompile_runtime(fname, debug, verbose):
     else:
         return fname
 
-def pretty_print_statistics(stats):
-    print('Module statistics:')
+def pretty_print_statistics(results):
     print('{')
-    for k, v in stats:
-        print('{}: {},'.format(k, v))
+    print('"Module-wise":')
+    print('[')
+    for res in results:
+        print('{},'.format(res))
+    print('],')
+
+    langs = list(set([res['language'] for res in results]))
+
+    print('"Language-wise":')
+    print('{')
+    for lang in langs:
+        print('"{}":'.format(lang))
+        filt = [res['stats'] for res in results if res['language'] == lang]
+        agg_stats = aggregate_statistics(filt)
+        print('({}, {}),'.format(len(filt), agg_stats))
+    print('},')
+
+    print('"All":')
+    all_stats = [res['stats'] for res in results]
+    agg_stats = aggregate_statistics(all_stats)
+    print('({}, {}),'.format(len(all_stats), agg_stats))
     print('}')
 
 def aggregate_statistics(stats):
-    empty = input_gen_module.InputGenModule().get_empty_statistics()
+    empty = igm.InputGenModule().get_empty_statistics()
     agg_stats = functools.reduce(
-        input_gen_module.InputGenModule().add_statistics, stats, empty)
+        igm.InputGenModule().add_statistics, stats, empty)
     return agg_stats
 
 def handle_single_module_i(i):
     ds_i = ds.skip(i)
-    module = list(ds_i.take(1))[0]
-    return input_gen_module.handle_single_module((i, module), args)
+    row = list(ds_i.take(1))[0]
+    module = row['content']
+    language = row['language']
+    return {'idx': i, 'language': language, 'stats': igm.handle_single_module((i, module), args)}
 
 def add_option_args(parser):
     parser.add_argument('--dataset', default='llvm-ml/ComPile')
@@ -75,7 +95,7 @@ def add_option_args(parser):
     parser.set_defaults(precompile_rts=True)
     parser.add_argument('--get-jug-results', action='store_true')
 
-    input_gen_module.add_option_args(parser)
+    igm.add_option_args(parser)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('MassInputGen')
@@ -97,8 +117,4 @@ if __name__ == '__main__':
         tasks = range(args.start, args.end)
         stats = pool.imap(handle_single_module_i, tasks, chunksize=1)
         stats = list(stats)
-        agg_stats = aggregate_statistics(stats)
-
-        pretty_print_statistics(list(zip(range(args.start, args.end), stats)))
-
-        print('Statistics: {}'.format(agg_stats))
+        pretty_print_statistics(stats)

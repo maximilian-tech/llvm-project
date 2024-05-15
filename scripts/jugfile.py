@@ -15,8 +15,10 @@ import input_gen_module as igm
 
 def handle_single_module_i(i):
     ds_i = ds.skip(i)
-    module = list(ds_i.take(1))[0]
-    return igm.handle_single_module((i, module), args)
+    row = list(ds_i.take(1))[0]
+    module = row['content']
+    language = row['language']
+    return {'idx': i, 'language': language, 'stats': igm.handle_single_module((i, module), args)}
 
 parser = argparse.ArgumentParser('MassInputGenJug')
 mig.add_option_args(parser)
@@ -44,7 +46,6 @@ if not args.get_jug_results:
     ds = load_dataset(args.dataset, split='train', streaming=True)
     os.makedirs(args.outdir, exist_ok=True)
 
-results = []
+tasks = []
 for i in range(args.start, args.end):
-    results.append(jug.Task(handle_single_module_i, i))
-results = list(zip(range(args.start, args.end), results))
+    tasks.append(jug.Task(handle_single_module_i, i))

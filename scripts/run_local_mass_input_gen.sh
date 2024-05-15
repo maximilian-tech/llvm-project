@@ -14,11 +14,6 @@ END=${END:=7000}
 NUM_CPU=${NUM_CPU:="$(nproc --all)"}
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-CURDATE=$(date +"%Y-%m-%dT%H:%M:%S%z")
-JOB_LOG_DIR="$LCWS/results/jobs/$CURDATE/"
-mkdir -p "$JOB_LOG_DIR"
-JOB_NAME="compile-inputgen"
-JOB_LOG="$JOB_LOG_DIR/job-$JOB_NAME.main.out"
 
 SCRIPT="$SCRIPT_DIR/mass_input_gen.py"
 
@@ -44,13 +39,6 @@ if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 
-if [ "$JUG" == "" ]; then
-    echo "$JOB_LOG"
-    echo tail -f "$JOB_LOG"
-    echo vim "$JOB_LOG"
-    echo less "$JOB_LOG"
-fi
-
 . "$SCRIPT_DIR/enable.sh" "/usr/WS1/$USER/opt/input-gen-release"
 export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
 
@@ -69,8 +57,4 @@ function run() {
         --input-run-timeout 5 \
         --num-procs="$NUM_CPU" $ADDITIONAL_FLAGS
 }
-if [ "$JUG" != "" ]; then
-    run
-else
-    run &> "$JOB_LOG"
-fi
+run

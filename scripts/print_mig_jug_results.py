@@ -10,21 +10,15 @@ jug.init(jf, jf[:-3] + '.jugdata/')
 import mass_input_gen as mig
 import jugfile
 
-stats = jugfile.results
-stats = [x for x in jugfile.results if x[1].can_load()]
+tasks = [x for x in jugfile.tasks if x.can_load()]
 
 if jugfile.args.invalidate_instrumentation_failures:
-    for i, task in stats:
+    for task in tasks:
         val = jug.task.value(task)
-        if val['num_instrumented_funcs'] == 0:
-            print('Invalidating {}'.format(i))
+        if val['stats']['num_instrumented_funcs'] == 0:
+            print('Invalidating {}'.format(val['idx']))
             task.invalidate()
     sys.exit(0)
 
-stats = jug.task.value(stats)
-
-agg_stats = mig.aggregate_statistics([x[1] for x in stats])
-
+stats = jug.task.value(tasks)
 mig.pretty_print_statistics(stats)
-print('Statistics: {}'.format(agg_stats))
-print('Len {}'.format(len(stats)))
