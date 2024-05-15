@@ -190,11 +190,17 @@ void InputGenInstrumenter::instrumentMemIntrinsic(MemIntrinsic *MI) {
   IRBuilder<> IRB(MI);
   IRB.SetCurrentDebugLocation(MI->getDebugLoc());
   if (isa<MemTransferInst>(MI)) {
-    IRB.CreateCall(isa<MemMoveInst>(MI) ? InputGenMemmove : InputGenMemcpy,
-                   {MI->getOperand(0), MI->getOperand(1), MI->getOperand(2)});
+    auto Callee = isa<MemMoveInst>(MI) ? InputGenMemmove : InputGenMemcpy;
+    IRB.CreateCall(Callee, {MI->getOperand(0), MI->getOperand(1),
+                            IRB.CreateZExtOrTrunc(
+                                MI->getOperand(2),
+                                Callee.getFunctionType()->getParamType(2))});
   } else if (isa<MemSetInst>(MI)) {
     IRB.CreateCall(InputGenMemset,
-                   {MI->getOperand(0), MI->getOperand(1), MI->getOperand(2)});
+                   {MI->getOperand(0), MI->getOperand(1),
+                    IRB.CreateZExtOrTrunc(
+                        MI->getOperand(2),
+                        InputGenMemset.getFunctionType()->getParamType(2))});
   }
   MI->eraseFromParent();
 }
