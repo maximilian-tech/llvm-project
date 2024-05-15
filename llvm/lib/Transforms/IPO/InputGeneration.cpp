@@ -119,7 +119,8 @@ bool isLandingPadType(GlobalVariable &GV) {
       return true;
     else if (auto CB = dyn_cast<CallBase>(U.getUser()))
       return CB->getCalledFunction() &&
-             CB->getCalledFunction()->getName() == "llvm.eh.typeid.for";
+             (CB->getCalledFunction()->getName() == "llvm.eh.typeid.for" ||
+              CB->getCalledFunction()->getName() == "__cxa_throw");
     else
       return false;
   });
@@ -136,8 +137,18 @@ bool shouldPreserveGV(GlobalVariable &GV) {
   return isLandingPadType(GV) || isLibCGlobal(GV.getName());
 }
 
+bool isPersonalityFunction(Function &F) {
+  return all_of(F.uses(), [&](Use &U) {
+    if (auto *UserF = dyn_cast<Function>(U.getUser()))
+      if (UserF->getPersonalityFn() == &F)
+        return true;
+    return false;
+  });
+}
+
 bool isAllowedExternFunc(Function &F, TargetLibraryInfo &TLI) {
-  return StringSwitch<bool>(F.getName()).Case("printf", true).Default(false);
+  return isPersonalityFunction(F) ||
+         StringSwitch<bool>(F.getName()).Case("printf", true).Default(false);
 
   // TODO Maybe provide a way for the user to specify the allowed external
   // functions
