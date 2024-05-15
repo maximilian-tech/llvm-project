@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/InputGeneration.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
@@ -114,15 +115,10 @@ namespace {
 // These are global variables that are never meant to be defined and are just
 // used to identify types in the source language
 bool isLandingPadType(GlobalVariable &GV) {
-  return all_of(GV.uses(), [](Use &U) {
+  return !GV.use_empty() && any_of(GV.uses(), [](Use &U) {
     if (isa<LandingPadInst>(U.getUser()))
       return true;
-    else if (auto CB = dyn_cast<CallBase>(U.getUser()))
-      return CB->getCalledFunction() &&
-             (CB->getCalledFunction()->getName() == "llvm.eh.typeid.for" ||
-              CB->getCalledFunction()->getName() == "__cxa_throw");
-    else
-      return false;
+    return false;
   });
 }
 
@@ -133,14 +129,18 @@ bool isLibCGlobal(StringRef Name) {
       .Default(false);
 }
 
-bool shouldNotStubGV(GlobalVariable &GV) { return isLibCGlobal(GV.getName()); }
-
-bool shouldPreserveGVName(GlobalVariable &GV) {
-  return isLandingPadType(GV) || shouldNotStubGV(GV);
+bool shouldNotStubGV(GlobalVariable &GV) {
+  return isLandingPadType(GV) || isLibCGlobal(GV.getName()) ||
+         StringSwitch<bool>(GV.getName())
+             .Case("llvm.used", true)
+             .Case("llvm.compiler.used", true)
+             .Default(false);
 }
 
+bool shouldPreserveGVName(GlobalVariable &GV) { return shouldNotStubGV(GV); }
+
 bool isPersonalityFunction(Function &F) {
-  return all_of(F.uses(), [&](Use &U) {
+  return !F.use_empty() && all_of(F.uses(), [&](Use &U) {
     if (auto *UserF = dyn_cast<Function>(U.getUser()))
       if (UserF->getPersonalityFn() == &F)
         return true;
@@ -522,7 +522,7 @@ bool ModuleInputGenInstrumenter::instrumentClEntryPoint(Module &M) {
   return instrumentModuleForFunction(M, *EntryPoint);
 }
 
-static void renameGlobals(Module &M) {
+static void renameGlobals(Module &M, TargetLibraryInfo &TLI) {
   // Some modules define their own 'malloc' etc. or make aliases to existing
   // functions. We do not want them to override any definition that we depend
   // on in our runtime, thus, rename all globals.
@@ -540,6 +540,8 @@ static void renameGlobals(Module &M) {
   }
   for (auto &X : M.functions()) {
     X.setComdat(nullptr);
+    if (shouldPreserveFuncName(X, TLI))
+      continue;
     Rename(X);
   }
   for (auto &X : M.ifuncs()) {
@@ -565,7 +567,7 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
   IGI.initializeCallbacks(M);
   IGI.provideGlobals(M);
 
-  renameGlobals(M);
+  renameGlobals(M, *TLI);
 
   switch (IGI.Mode) {
   case IG_Run:
@@ -754,12 +756,19 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
 
 void InputGenInstrumenter::provideGlobals(Module &M) {
   // Erase global c/dtors
-  if (GlobalVariable *GVCtor = M.getNamedGlobal("llvm.global_ctors"))
-    GVCtor->eraseFromParent();
-  if (GlobalVariable *GVDtor = M.getNamedGlobal("llvm.global_dtors"))
-    GVDtor->eraseFromParent();
+  auto Erase = [&](StringRef Name) {
+    if (GlobalVariable *GV = M.getNamedGlobal(Name))
+      GV->eraseFromParent();
+  };
+  Erase("llvm.global_ctors");
+  Erase("llvm.global_dtors");
 
   for (GlobalVariable &GV : M.globals()) {
+    if (isLandingPadType(GV)) {
+      GV.setLinkage(GlobalValue::WeakAnyLinkage);
+      GV.setInitializer(Constant::getNullValue(GV.getValueType()));
+      continue;
+    }
     if (shouldNotStubGV(GV))
       continue;
     if (!GV.getValueType()->isSized()) {
