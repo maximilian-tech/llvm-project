@@ -50,7 +50,7 @@ def pretty_print_statistics(results):
         print('{},'.format(res))
     print('],')
 
-    langs = list(set([res['language'] for res in results]))
+    langs = list({res['language'] for res in results})
 
     print('"Language-wise":')
     print('{')
@@ -58,13 +58,13 @@ def pretty_print_statistics(results):
         print('"{}":'.format(lang))
         filt = [res['stats'] for res in results if res['language'] == lang]
         agg_stats = aggregate_statistics(filt)
-        print('({}, {}),'.format(len(filt), agg_stats))
+        print('{{"num": {}, "stats": {}}},'.format(len(filt), agg_stats))
     print('},')
 
     print('"All":')
     all_stats = [res['stats'] for res in results]
     agg_stats = aggregate_statistics(all_stats)
-    print('({}, {}),'.format(len(all_stats), agg_stats))
+    print('{{"num": {}, "stats": {}}},'.format(len(all_stats), agg_stats))
     print('}')
 
 def aggregate_statistics(stats):
