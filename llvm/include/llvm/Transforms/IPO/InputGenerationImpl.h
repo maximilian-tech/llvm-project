@@ -129,11 +129,15 @@ public:
                                      CallbackCollectionTy &CC, Type *T,
                                      Value *ValueToReplace,
                                      ValueToValueMapTy *VMap);
+  Value *constructFpFromPotentialCallees(IRBuilderBase &IRB, Argument& Arg);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F, bool UniqName);
   void createRunEntryPoint(Function &F, bool UniqName);
   void createGlobalCalls(Module &M, IRBuilder<> &IRB);
+  void stubDeclaration(Module &M, Function &F);
+  Function& stubDeclaration(Module &M, FunctionType& FT, StringRef Suffix);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
+  void gatherFunctionPtrCallees(Module &M);
   void provideGlobals(Module &M);
   SetVector<Function *> pruneModule(Function &F);
 

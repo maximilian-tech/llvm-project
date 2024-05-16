@@ -31,6 +31,9 @@ static unsigned CurStub = 0;
 static std::vector<ObjectTy> Globals;
 static size_t CurGlobal = 0;
 
+static std::vector<intptr_t> FunctionPtrs;
+static size_t CurFunctionPtr = 0;
+
 static std::mt19937 Gen;
 static std::uniform_int_distribution<> Rand;
 int rand() { return Rand(Gen); }
@@ -59,6 +62,13 @@ void __inputrun_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
   memcpy(Global + Obj.InputOffset,
          Obj.Start - Obj.OutputOffset + Obj.InputOffset, Obj.InputSize);
   CurGlobal++;
+}
+
+VoidPtrTy __inputgen_select_fp(VoidPtrTy* FPCandidates, uint64_t N) {
+  assert(FunctionPtrs.size() > CurFunctionPtr);
+  auto *FunctionPtr = FPCandidates[FunctionPtrs[CurFunctionPtr]];
+  CurFunctionPtr++;
+  return FunctionPtr;
 }
 
 #define RW(TY, NAME)                                                           \
@@ -202,6 +212,15 @@ int main(int argc, char **argv) {
     INPUTGEN_DEBUG(printf("GenVal #%d : %p\n", I, (void *)ArgsMemory));
     if (IsPtr)
       RelocatePointer(reinterpret_cast<VoidPtrTy *>(CurMem), "GenVal");
+  }
+
+  uint32_t NumGenFunctionPtrs = readV<uint32_t>(Input);
+  INPUTGEN_DEBUG(printf("NFP %u\n", NumGenFunctionPtrs));
+  FunctionPtrs.reserve(NumGenFunctionPtrs);
+  for(uint32_t I = 0; I < NumGenFunctionPtrs; I++) {
+    auto FpIdx = readV<intptr_t>(Input);
+    FunctionPtrs.push_back(FpIdx);
+    INPUTGEN_DEBUG(printf("FP #%u -> #%lu\n", I, FpIdx));
   }
 
   StubsMemory = ArgsMemory + NumArgs * MaxPrimitiveTypeSize;
