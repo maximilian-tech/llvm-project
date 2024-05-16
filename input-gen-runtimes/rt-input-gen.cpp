@@ -726,7 +726,14 @@ struct InputGenRTTy {
                           (void *)Global, Obj.Idx, (void *)ReplGlobal));
   }
 
+  intptr_t registerFunctionPtrIdx(size_t N) {
+    auto Offset = rand(false) % N;
+    FunctionPtrs.push_back(Offset);
+    return Offset;
+  }
+
   std::vector<size_t> Globals;
+  std::vector<intptr_t> FunctionPtrs;
 
   uint64_t NumNewValues = 0;
 
@@ -847,6 +854,12 @@ struct InputGenRTTy {
       InputOut.write(ccast(GenVal.Content), MaxPrimitiveTypeSize);
       writeV<int32_t>(InputOut, GenVal.IsPtr);
     }
+
+    uint32_t NumGenFunctionPtrs = FunctionPtrs.size();
+    writeV<uint32_t>(InputOut, NumGenFunctionPtrs);
+    for(intptr_t FPOffset : FunctionPtrs) {
+      writeV<intptr_t>(InputOut, FPOffset);
+    }
   }
 };
 
@@ -889,6 +902,10 @@ void __inputgen_deinit() {
 void __inputgen_global(int32_t NumGlobals, VoidPtrTy Global,
                        VoidPtrTy *ReplGlobal, int32_t GlobalSize) {
   getInputGenRT().registerGlobal(Global, ReplGlobal, GlobalSize);
+}
+
+VoidPtrTy __inputgen_select_fp(VoidPtrTy *PotentialFPs, uint64_t N) {
+  return PotentialFPs[getInputGenRT().registerFunctionPtrIdx(N)];
 }
 
 // TODO: need to support overlapping Tgt and Src here

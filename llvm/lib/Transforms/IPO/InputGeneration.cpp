@@ -45,6 +45,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
@@ -624,6 +625,7 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
   switch (IGI.Mode) {
   case IG_Run:
   case IG_Generate:
+    IGI.gatherFunctionPtrCallees(M);
     if (auto *OldMain = M.getFunction("main"))
       OldMain->setName("__input_gen_user_main");
     break;
@@ -791,6 +793,28 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       M.getOrInsertFunction(Prefix + "cmp_ptr", VoidTy, PtrTy, PtrTy, Int32Ty);
   UnreachableCallback =
       M.getOrInsertFunction(Prefix + "unreachable", VoidTy, Int32Ty, PtrTy);
+}
+
+Function &InputGenInstrumenter::stubDeclaration(Module &M, FunctionType &FT,
+                                                StringRef Suffix) {
+  auto *F = Function::Create(&FT, GlobalValue::WeakAnyLinkage,
+                             "__inputgen_fpstub_" + Suffix, M);
+  stubDeclaration(M, *F);
+  return *F;
+}
+
+void InputGenInstrumenter::stubDeclaration(Module &M, Function &F) {
+  F.setLinkage(GlobalValue::WeakAnyLinkage);
+
+  auto *EntryBB = BasicBlock::Create(*Ctx, "entry", &F);
+
+  IRBuilder<> IRB(EntryBB);
+  auto *RTy = F.getReturnType();
+  if (RTy->isVoidTy())
+    IRB.CreateRetVoid();
+  else
+    IRB.CreateRet(
+        constructTypeUsingCallbacks(M, IRB, StubValueGenCallback, RTy));
 }
 
 void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
@@ -1268,6 +1292,74 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
   }
 }
 
+Value *InputGenInstrumenter::constructFpFromPotentialCallees(IRBuilderBase &IRB,
+                                                             Argument &Arg) {
+  static int I = 0;
+  I++;
+
+  LLVM_DEBUG(dbgs() << Arg << " for " << Arg.getParent()->getName() << '\n');
+  auto &M = *Arg.getParent()->getParent();
+  bool HaveStub = false;
+  SetVector<Constant *> CalleeSet;
+  for (auto *U : Arg.users()) {
+    if (auto *CI = dyn_cast<CallBase>(U);
+        CI && CI->getCalledOperand() == &Arg) {
+      if (!HaveStub) {
+        CalleeSet.insert(
+            &stubDeclaration(M, *CI->getFunctionType(), std::to_string(I)));
+        HaveStub = true;
+      }
+      for (auto &CalleeMD :
+           CI->getMetadata(LLVMContext::MD_callees)->operands()) {
+        auto *CalleeAsVMD = cast<ValueAsMetadata>(CalleeMD)->getValue();
+        auto *Callee = cast<Function>(CalleeAsVMD);
+
+        CalleeSet.insert(Callee);
+        outs() << Callee->getName() << '\n';
+      }
+    }
+  }
+  if (CalleeSet.empty()) {
+    return nullptr;
+  }
+
+  auto Callees = CalleeSet.takeVector();
+  sort(Callees, [](const Constant *LHS, const Constant *RHS) {
+    return LHS->getName() < RHS->getName();
+  });
+
+  auto *ArrTy =
+      ArrayType::get(PointerType::getUnqual(Arg.getContext()), Callees.size());
+  auto *CalleeArr = ConstantArray::get(ArrTy, Callees);
+
+  auto *CalleeGV =
+      new GlobalVariable(ArrTy, true, GlobalValue::WeakAnyLinkage, CalleeArr,
+                         "__inputgen_fp_map_" + std::to_string(I));
+  M.insertGlobalVariable(CalleeGV);
+
+  auto *FPTy = PointerType::getUnqual(Arg.getContext());
+
+  auto SelectFp = M.getOrInsertFunction(
+      "__inputgen_select_fp",
+      FunctionType::get(FPTy, {CalleeGV->getType(), IRB.getInt64Ty()}, false));
+  return IRB.CreateCall(SelectFp, {CalleeGV, IRB.getInt64(Callees.size())});
+}
+
+namespace {
+void gatherCallbackArguments(Function &F, SetVector<uint64_t> &FPArgs) {
+  if (auto *CallbackMD = F.getMetadata(LLVMContext::MD_callback)) {
+    for (auto &CBArgMD : CallbackMD->operands()) {
+      if (auto *CBArgNode = dyn_cast<MDNode>(CBArgMD)) {
+        auto *CBArgIdxMD = cast<ConstantAsMetadata>(CBArgNode->getOperand(0));
+        auto CBArgIdx =
+            cast<ConstantInt>(CBArgIdxMD->getValue())->getZExtValue();
+        FPArgs.insert(CBArgIdx);
+      }
+    }
+  }
+}
+} // namespace
+
 void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
                                                       bool UniqName) {
   Module &M = *F.getParent();
@@ -1295,12 +1387,19 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
   if (F.getFnAttribute("min-legal-vector-width").isValid())
     EntryPoint->addFnAttr(F.getFnAttribute("min-legal-vector-width"));
 
+  SetVector<uint64_t> FPArgs;
+  gatherCallbackArguments(F, FPArgs);
+
   SmallVector<Value *> Args;
   ValueToValueMapTy VMap;
-  for (auto &Arg : F.args()) {
-    Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
-                                               Arg.getType(), &Arg, &VMap));
-    VMap[&Arg] = Args.back();
+  for (uint64_t A = 0; A < F.arg_size(); ++A) {
+    auto &Arg = *F.getArg(A);
+    if (FPArgs.contains(A)) {
+      Args.push_back(constructFpFromPotentialCallees(IRB, Arg));
+    } else {
+      Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
+                                                 Arg.getType(), &Arg, &VMap));
+    }
   }
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
   if (Ret->getType()->isVoidTy())
@@ -1375,8 +1474,18 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
       return IRB.CreateLoad(ElTy, ArgPtr);
     }
   };
-  for (auto &Arg : F.args())
-    Args.push_back(HandleType(Arg.getType(), &Arg));
+
+  SetVector<uint64_t> FPArgs;
+  gatherCallbackArguments(F, FPArgs);
+
+  for (uint64_t A = 0; A < F.arg_size(); ++A) {
+    auto &Arg = *F.getArg(A);
+    if (FPArgs.contains(A)) {
+      Args.push_back(constructFpFromPotentialCallees(IRB, Arg));
+    } else {
+      Args.push_back(HandleType(Arg.getType(), &Arg));
+    }
+  }
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
   if (Ret->getType()->isVoidTy())
     return;
