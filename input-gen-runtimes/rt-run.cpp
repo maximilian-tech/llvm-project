@@ -77,16 +77,32 @@ RW(long double, x86_fp80)
 }
 
 int main(int argc, char **argv) {
-  if (argc != 3 && argc != 2) {
+  if (argc != 4 && argc != 5 && argc != 2) {
     std::cerr << "Wrong usage." << std::endl;
     return 1;
   }
 
   char *InputName = argv[1];
   std::string FuncName = ("__inputrun_entry");
-  if (argc == 3) {
-    FuncName += "___inputgen_renamed_";
-    FuncName += argv[2];
+  if (argc == 4) {
+    std::string Type = argv[2];
+    if (Type == "--name") {
+      FuncName += "___inputgen_renamed_";
+      FuncName += argv[3];
+    } else {
+      std::cerr << "Wrong usage." << std::endl;
+      abort();
+    }
+  }
+  if (argc == 5) {
+    std::string Type = argv[2];
+    if (Type == "--file") {
+      FuncName += "___inputgen_renamed_";
+      FuncName += getFunctionNameFromFile(argv[3], argv[4]);
+    } else {
+      std::cerr << "Wrong usage." << std::endl;
+      abort();
+    }
   }
 
   VERBOSE = (bool)getenv("VERBOSE");

@@ -674,7 +674,7 @@ int main(int argc, char **argv) {
   INPUTGEN_DEBUG(std::cerr << "Stack pointer: " << (void *)StackPtr
                            << std::endl);
 
-  if (argc != 6 && argc != 4) {
+  if (argc != 7 && argc != 4) {
     std::cerr << "Wrong usage." << std::endl;
     return 1;
   }
@@ -684,17 +684,27 @@ int main(int argc, char **argv) {
   int End = std::stoi(argv[3]);
   std::string FuncName = ("__inputgen_entry");
   std::string FuncIdent = "";
-  if (argc == 6) {
+  if (argc == 7) {
+    std::string Type = argv[4];
     FuncName += "___inputgen_renamed_";
-    FuncName += argv[4];
-    FuncIdent += argv[5];
+    if (Type == "--name") {
+      FuncIdent += argv[6];
+      FuncName += argv[5];
+    } else if (Type == "--file") {
+      FuncIdent += argv[6];
+      FuncName += getFunctionNameFromFile(argv[5], FuncIdent);
+    } else {
+      std::cerr << "Invalid arg type, must be --name or --file" << std::endl;
+      abort();
+    }
   }
 
   int Size = End - Start;
   if (Size <= 0)
     return 1;
 
-  std::cout << "Will generate " << Size << " inputs." << std::endl;
+  std::cout << "Will generate " << Size << " inputs for function " << FuncName
+            << " " << FuncIdent << std::endl;
 
   void *Handle = dlopen(NULL, RTLD_NOW);
   if (!Handle) {

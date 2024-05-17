@@ -25,8 +25,10 @@ def add_option_args(parser):
     parser.add_argument('--cleanup', action='store_true')
 
 class Function:
-    def __init__(self, name, verbose):
+    def __init__(self, name, ident, verbose):
         self.name = name
+        self.ident = ident
+        self.verbose = verbose
         self.input_gen_executable = None
         self.input_run_executable = None
         self.inputs_dir = None
@@ -34,7 +36,6 @@ class Function:
         self.succeeded_seeds = []
         self.inputs = []
         self.times = {}
-        self.verbose = verbose
 
     def get_stderr(self):
         if self.verbose:
@@ -48,23 +49,25 @@ class Function:
         else:
             return subprocess.DEVNULL
 
-    def run_all_inputs(self, timeout):
-        for input in self.inputs:
-            self.run_input(input, timeout)
+    def run_all_inputs(self, timeout, available_functions_file_name):
+        for inpt in self.inputs:
+            self.run_input(inpt, timeout, available_functions_file_name)
 
     def print(self, *args, **kwargs):
         if self.verbose:
             print(*args, **kwargs)
 
-    def run_input(self, input, timeout):
+    def run_input(self, inpt, timeout, available_functions_file_name):
         self.print('Running executables for', self.input_run_executable)
 
         try:
             start_time = time.time()
             igrunargs = [
                     self.input_run_executable,
-                    input,
-                    self.name,
+                    inpt,
+                    '--file',
+                    available_functions_file_name,
+                    self.ident,
                 ]
             proc = subprocess.Popen(
                 igrunargs,
@@ -78,21 +81,21 @@ class Function:
             elapsed_time = end_time - start_time
 
             if proc.returncode != 0:
-                self.print('Input run process failed (%i): %s' % (proc.returncode, input))
+                self.print('Input run process failed (%i): %s' % (proc.returncode, inpt))
             else:
-                if input not in self.times:
-                    self.times[input] = []
-                self.times[input].append(elapsed_time)
+                if inpt not in self.times:
+                    self.times[inpt] = []
+                self.times[inpt].append(elapsed_time)
 
         except subprocess.CalledProcessError as e:
-            self.print('Input run process failed: %s' % input)
+            self.print('Input run process failed: %s' % inpt)
         except subprocess.TimeoutExpired as e:
-            self.print("Input run timed out! Terminating... %s" % input)
+            self.print("Input run timed out! Terminating... %s" % inpt)
             proc.terminate()
             try:
                 proc.communicate(timeout=1)
             except subprocess.TimeoutExpired as e:
-                self.print("Termination timed out! Killing... %s" % input)
+                self.print("Termination timed out! Killing... %s" % inpt)
                 proc.kill()
                 proc.communicate()
                 self.print("Killed.")
@@ -169,25 +172,19 @@ class InputGenModule:
             self.print('Failed to instrument')
             instrumentation_failed = True
 
-        available_functions_file_name = os.path.join(self.outdir, 'available_functions')
+        self.available_functions_file_name = os.path.join(self.outdir, 'available_functions')
         try:
-            available_functions_file = open(available_functions_file_name, 'r')
+            available_functions_file = open(self.available_functions_file_name, 'r')
         except IOError as e:
             self.print("Could not open available functions file:", e)
             self.print("input-gen args:", " ".join(igargs))
             raise e
         else:
-            for line in available_functions_file.read().splitlines():
-                # Apparently llvm function names can have spaces in them so
-                # split only at the first space
-                splitline = line.split(' ', 1)
-                if len(splitline) != 2:
-                    self.print_err('Available functions file line {} did not split in two'.format(line))
-                    raise Exception
-                fid = splitline[0]
-                fname = splitline[1]
-
-                func = Function(fname, self.verbose)
+            zerosplit = available_functions_file.read().split('\0')
+            fids = zerosplit[0:-1:2]
+            fnames = zerosplit[1::2]
+            for (fid, fname) in zip(fids, fnames, strict=True):
+                func = Function(fname, fid, self.verbose)
                 self.functions.append(func)
 
                 if instrumentation_failed:
@@ -221,12 +218,13 @@ class InputGenModule:
                             seed += 1
                             end = start + 1
                             iggenargs = [
-                                    input_gen_executable,
-                                    inputs_dir,
-                                    str(start), str(end),
-                                    fname,
-                                    fid,
-                                ]
+                                input_gen_executable,
+                                inputs_dir,
+                                str(start), str(end),
+                                '--file',
+                                self.available_functions_file_name,
+                                fid,
+                            ]
                             self.print('ig args generation:', ' '.join(iggenargs))
                             proc = subprocess.Popen(
                                 iggenargs,
@@ -288,7 +286,7 @@ class InputGenModule:
 
     def run_all_inputs(self):
         for func in self.functions:
-            func.run_all_inputs(self.input_run_timeout)
+            func.run_all_inputs(self.input_run_timeout, self.available_functions_file_name)
 
     def get_empty_statistics(self):
         stats = {

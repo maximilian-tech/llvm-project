@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <fstream>
+#include <iostream>
 
 namespace {
 extern int VERBOSE;
@@ -84,5 +85,21 @@ struct ObjectAddressing {
     ObjIdxMask = ~(PtrInObjMask);
   }
 };
+
+static std::string getFunctionNameFromFile(std::string FileName,
+                                           std::string FuncIdent) {
+  std::string OriginalFuncName;
+  std::ifstream In(FileName);
+  std::string Id;
+  while (std::getline(In, Id, '\0') &&
+         std::getline(In, OriginalFuncName, '\0') && Id != FuncIdent)
+    ;
+  if (Id != FuncIdent) {
+    std::cerr << "Could not find function with ID " << FuncIdent << " in "
+              << FileName << std::endl;
+    abort();
+  }
+  return OriginalFuncName;
+}
 
 #endif // _INPUT_GEN_RUNTIMES_RT_H_

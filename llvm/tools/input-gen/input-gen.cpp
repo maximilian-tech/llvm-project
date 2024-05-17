@@ -283,7 +283,10 @@ public:
     unsigned Idx = 0;
     for (auto &F : M.getFunctionList()) {
       if (shouldGen(F)) {
-        Fs << Idx << " " << F.getName().str() << std::endl;
+        Fs << Idx;
+        Fs.write("\0", 1);
+        Fs << F.getName().str();
+        Fs.write("\0", 1);
         Functions.push_back(&F);
         Idx++;
       }
