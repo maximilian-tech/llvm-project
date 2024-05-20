@@ -180,7 +180,7 @@ public:
     PB.registerLoopAnalyses(LAM);
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-    ModuleInputGenInstrumenter MIGI(*InstrM, MAM, Mode);
+    ModuleInputGenInstrumenter MIGI(*InstrM, MAM, Mode, true);
     bool Success = MIGI.instrumentModuleForFunction(
         *InstrM, *cast<Function>(VMap[&EntryPoint]));
     if (!Success) {
@@ -233,11 +233,14 @@ public:
     PB.registerLoopAnalyses(LAM);
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-    ModulePassManager MPM;
+    bool InstrumentForCoverage =
+        Mode == llvm::IG_Run && ClInstrumentModuleForCoverage;
 
-    if (Mode == llvm::IG_Run && ClInstrumentModuleForCoverage)
+    if (InstrumentForCoverage) {
+      ModulePassManager MPM;
       MPM.addPass(PGOInstrumentationGen());
-    MPM.run(*InstrM, MAM);
+      MPM.run(*InstrM, MAM);
+    }
 
     if (ClOptimizeBeforeInstrumenting) {
       ModulePassManager MPM =
@@ -245,7 +248,7 @@ public:
       MPM.run(*InstrM, MAM);
     }
 
-    ModuleInputGenInstrumenter MIGI(*InstrM, MAM, Mode);
+    ModuleInputGenInstrumenter MIGI(*InstrM, MAM, Mode, InstrumentForCoverage);
     bool Success = MIGI.instrumentModule(*InstrM);
     if (!Success) {
       llvm::outs() << "Instrumenting failed\n";
@@ -280,9 +283,11 @@ public:
 
     // Lower profiling intrinsics if we have any so that we can pull PGO data
     // out.
-    ModulePassManager MPM2;
-    MPM2.addPass(InstrProfilingLoweringPass());
-    MPM2.run(*InstrM, MAM);
+    if (InstrumentForCoverage) {
+      ModulePassManager MPM;
+      MPM.addPass(InstrProfilingLoweringPass());
+      MPM.run(*InstrM, MAM);
+    }
 
     std::string BcFileName =
         ClOutputDir + "/" + "input-gen.module." + ModeStr + ".bc";

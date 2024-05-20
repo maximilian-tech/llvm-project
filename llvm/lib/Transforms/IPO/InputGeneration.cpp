@@ -129,19 +129,6 @@ bool isLibCGlobal(StringRef Name) {
       .Default(false);
 }
 
-bool shouldNotStubGV(GlobalVariable &GV) {
-  if (isLandingPadType(GV) || isLibCGlobal(GV.getName()))
-    return true;
-  else if (GV.getName() == "llvm.used" || GV.getName() == "llvm.compiler.used")
-    return true;
-  else if (GV.getName().starts_with("__llvm") ||
-           GV.getName().starts_with("__prof"))
-    return true;
-  return false;
-}
-
-bool shouldPreserveGVName(GlobalVariable &GV) { return shouldNotStubGV(GV); }
-
 bool isPersonalityFunction(Function &F) {
   return !F.use_empty() && all_of(F.uses(), [&](Use &U) {
     if (auto *UserF = dyn_cast<Function>(U.getUser()))
@@ -149,21 +136,6 @@ bool isPersonalityFunction(Function &F) {
         return true;
     return false;
   });
-}
-
-bool shouldNotStubFunc(Function &F, TargetLibraryInfo &TLI) {
-  // TODO Maybe provide a way for the user to specify the allowed external
-  // functions
-  return StringSwitch<bool>(F.getName())
-      .Case("printf", true)
-      .Case("malloc", true)
-      .Case("free", true)
-      .Case("__cxa_throw", true)
-      .Default(false);
-}
-
-bool shouldPreserveFuncName(Function &F, TargetLibraryInfo &TLI) {
-  return isPersonalityFunction(F) || shouldNotStubFunc(F, TLI);
 }
 
 std::string getTypeName(const Type *Ty) {
@@ -184,11 +156,43 @@ std::string getTypeName(const Type *Ty) {
 }
 } // end anonymous namespace
 
+bool InputGenInstrumenter::shouldNotStubGV(GlobalVariable &GV) {
+  if (isLandingPadType(GV) || isLibCGlobal(GV.getName()))
+    return true;
+  else if (GV.getName() == "llvm.used" || GV.getName() == "llvm.compiler.used")
+    return true;
+  else if (InstrumentedForCoverage && (GV.getName().starts_with("__llvm") ||
+                                       GV.getName().starts_with("__prof")))
+    return true;
+  return false;
+}
+
+bool InputGenInstrumenter::shouldPreserveGVName(GlobalVariable &GV) {
+  return shouldNotStubGV(GV);
+}
+
+bool InputGenInstrumenter::shouldNotStubFunc(Function &F,
+                                             TargetLibraryInfo &TLI) {
+  // TODO Maybe provide a way for the user to specify the allowed external
+  // functions
+  return StringSwitch<bool>(F.getName())
+      .Case("printf", true)
+      .Case("malloc", true)
+      .Case("free", true)
+      .Case("__cxa_throw", true)
+      .Default(false);
+}
+
+bool InputGenInstrumenter::shouldPreserveFuncName(Function &F,
+                                                  TargetLibraryInfo &TLI) {
+  return isPersonalityFunction(F) || shouldNotStubFunc(F, TLI);
+}
+
 InputGenerationInstrumentPass::InputGenerationInstrumentPass() = default;
 
 PreservedAnalyses
 InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &MAM) {
-  ModuleInputGenInstrumenter Profiler(M, MAM, ClInstrumentationMode);
+  ModuleInputGenInstrumenter Profiler(M, MAM, ClInstrumentationMode, true);
   if (Profiler.instrumentClEntryPoint(M))
     return PreservedAnalyses::none();
   return PreservedAnalyses::all();
@@ -527,7 +531,8 @@ bool ModuleInputGenInstrumenter::instrumentClEntryPoint(Module &M) {
   return instrumentModuleForFunction(M, *EntryPoint);
 }
 
-static void renameGlobals(Module &M, TargetLibraryInfo &TLI) {
+void ModuleInputGenInstrumenter::renameGlobals(Module &M,
+                                               TargetLibraryInfo &TLI) {
   // Some modules define their own 'malloc' etc. or make aliases to existing
   // functions. We do not want them to override any definition that we depend
   // on in our runtime, thus, rename all globals.
@@ -537,7 +542,7 @@ static void renameGlobals(Module &M, TargetLibraryInfo &TLI) {
   };
   for (auto &X : M.globals()) {
     X.setComdat(nullptr);
-    if (shouldPreserveGVName(X))
+    if (IGI.shouldPreserveGVName(X))
       continue;
     if (X.getValueType()->isSized())
       X.setLinkage(GlobalVariable::InternalLinkage);
@@ -545,7 +550,7 @@ static void renameGlobals(Module &M, TargetLibraryInfo &TLI) {
   }
   for (auto &X : M.functions()) {
     X.setComdat(nullptr);
-    if (shouldPreserveFuncName(X, TLI))
+    if (IGI.shouldPreserveFuncName(X, TLI))
       continue;
     Rename(X);
   }
