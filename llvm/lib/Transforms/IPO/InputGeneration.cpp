@@ -134,7 +134,8 @@ bool shouldNotStubGV(GlobalVariable &GV) {
     return true;
   else if (GV.getName() == "llvm.used" || GV.getName() == "llvm.compiler.used")
     return true;
-  else if (GV.getName().starts_with("__llvm") || GV.getName().starts_with("__prof"))
+  else if (GV.getName().starts_with("__llvm") ||
+           GV.getName().starts_with("__prof"))
     return true;
   return false;
 }
