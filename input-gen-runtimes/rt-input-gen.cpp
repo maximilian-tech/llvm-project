@@ -244,7 +244,7 @@ private:
 };
 
 struct GenValTy {
-  uint8_t Content[MaxPrimitiveTypeSize];
+  uint8_t Content[MaxPrimitiveTypeSize] = {0};
   static_assert(sizeof(Content) == MaxPrimitiveTypeSize);
   int32_t IsPtr;
 };
@@ -518,9 +518,17 @@ struct InputGenRTTy {
     }
 
     uint32_t NumGenVals = GenVals.size();
+    INPUTGEN_DEBUG(printf("Num GenVals %u\n", NumGenVals));
+    INPUTGEN_DEBUG(printf("Num Args %u\n", NumArgs));
     writeV<uint32_t>(InputOut, NumGenVals);
     writeV<uint32_t>(InputOut, NumArgs);
+    I = 0;
     for (auto &GenVal : GenVals) {
+      INPUTGEN_DEBUG(printf("GenVal #%ld isPtr %d\n", I, GenVal.IsPtr));
+      INPUTGEN_DEBUG(printf("Content "));
+      for (unsigned J = 0; J < sizeof(GenVal.Content); J++)
+        INPUTGEN_DEBUG(printf("%d ", (int)GenVal.Content[J]));
+      INPUTGEN_DEBUG(printf("\n"));
       static_assert(sizeof(GenVal.Content) == MaxPrimitiveTypeSize);
       InputOut.write(ccast(GenVal.Content), MaxPrimitiveTypeSize);
       writeV<int32_t>(InputOut, GenVal.IsPtr);

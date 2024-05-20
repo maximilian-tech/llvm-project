@@ -190,18 +190,19 @@ int main(int argc, char **argv) {
   uint32_t NumArgs = readV<uint32_t>(Input);
   VoidPtrTy ArgsMemory =
       reinterpret_cast<VoidPtrTy>(calloc(NumGenVals, MaxPrimitiveTypeSize));
-  INPUTGEN_DEBUG(printf("Args %u : %p\n", NumArgs, (void *)ArgsMemory));
+  INPUTGEN_DEBUG(printf("GenVals %u : %p\n", NumGenVals, (void *)ArgsMemory));
   for (uint32_t I = 0; I < NumGenVals; ++I) {
     VoidPtrTy CurMem = ArgsMemory + I * MaxPrimitiveTypeSize;
     Input.read(ccast(CurMem), MaxPrimitiveTypeSize);
     auto IsPtr = readV<int32_t>(Input);
-    INPUTGEN_DEBUG(printf("Arg #%d : %p\n", I, (void *)ArgsMemory));
+    INPUTGEN_DEBUG(printf("GenVal #%d : %p\n", I, (void *)ArgsMemory));
     if (IsPtr)
       RelocatePointer(reinterpret_cast<VoidPtrTy *>(CurMem), "GenVal");
   }
 
   StubsMemory = ArgsMemory + NumArgs * MaxPrimitiveTypeSize;
   NumStubs = NumGenVals - NumArgs;
+  INPUTGEN_DEBUG(printf("Args %u : %p\n", NumArgs, (void *)ArgsMemory));
   INPUTGEN_DEBUG(printf("Stubs %u : %p\n", NumStubs, (void *)StubsMemory));
 
   void *Handle = dlopen(NULL, RTLD_NOW);
