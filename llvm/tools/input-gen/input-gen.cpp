@@ -20,6 +20,8 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
+#include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
+#include "llvm/Transforms/Instrumentation/InstrProfiling.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
@@ -65,6 +67,8 @@ static cl::opt<std::string> ClFunction("function", cl::cat(InputGenCategory));
 static cl::opt<bool>
     ClOptimizeBeforeInstrumenting("optimize-before-instrumenting",
                                   cl::cat(InputGenCategory));
+
+static cl::opt<bool> ClInstrumentModuleForCoverage("instrumented-module-for-coverage", cl::cat(InputGenCategory));
 
 constexpr char ToolName[] = "input-gen";
 
@@ -223,6 +227,12 @@ public:
     PB.registerLoopAnalyses(LAM);
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
+    ModulePassManager MPM;
+
+    if (Mode == llvm::IG_Run && ClInstrumentModuleForCoverage) 
+      MPM.addPass(PGOInstrumentationGen());
+    MPM.run(*InstrM, MAM);
+
     if (ClOptimizeBeforeInstrumenting) {
       ModulePassManager MPM =
           PB.buildPerModuleDefaultPipeline(OptimizationLevel::O1);
@@ -261,6 +271,13 @@ public:
         continue;
       }
     }
+
+    // Lower profiling intrinsics if we have any so that we can pull PGO data
+    // out.
+    ModulePassManager MPM2;
+    MPM.addPass(InstrProfilingLoweringPass());
+    MPM.run(*InstrM, MAM);
+
     std::string BcFileName =
         ClOutputDir + "/" + "input-gen.module." + ModeStr + ".bc";
     std::string ExecutableFileName =
@@ -341,7 +358,7 @@ public:
                          std::string RuntimeName) {
     if (ClCompileInputGenExecutables) {
       outs() << "Compiling " << ExecutableName << "\n";
-      SmallVector<StringRef, 10> Args = {Clang,       "-fopenmp",    "-ldl",
+      SmallVector<StringRef, 10> Args = {Clang,       "-ldl",
                                          "-rdynamic", RuntimeName,   ModuleName,
                                          "-o",        ExecutableName};
       if (ClDebug) {
