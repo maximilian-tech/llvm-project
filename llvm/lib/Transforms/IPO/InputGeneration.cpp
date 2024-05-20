@@ -708,10 +708,10 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
     InputGenMemoryAccessCallback[Ty] =
         M.getOrInsertFunction(Prefix + "access_" + ::getTypeName(Ty), VoidTy,
                               PtrTy, Int64Ty, Int32Ty, PtrTy, Int32Ty);
-    auto ValueGenFunc =
+    StubValueGenCallback[Ty] =
         M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty);
-    StubValueGenCallback[Ty] = ValueGenFunc;
-    ArgGenCallback[Ty] = ValueGenFunc;
+    ArgGenCallback[Ty] =
+        M.getOrInsertFunction(Prefix + "arg_" + ::getTypeName(Ty), Ty);
   }
 
   InputGenMemmove =
