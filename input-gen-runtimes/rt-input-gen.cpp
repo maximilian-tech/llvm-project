@@ -337,7 +337,8 @@ struct InputGenRTTy {
     return Idx;
   }
 
-  // Returns nullptr if it is not an object managed by us - a stack pointer
+  // Returns nullptr if it is not an object managed by us - a stack pointer or
+  // memory allocated by malloc
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
     size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
     INPUTGEN_DEBUG(std::cerr << "Access: " << (void *)GlobalPtr << " Obj #"
@@ -345,12 +346,8 @@ struct InputGenRTTy {
     [[maybe_unused]] bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
     bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
     assert(IsExistingObj || IsOutsideObjMemory);
-    if (IsOutsideObjMemory) {
-      // This means it is probably a stack pointer. The assert checks one of the
-      // bounds - the other one is unchecked TODO?
-      assert(StackPtr >= GlobalPtr);
+    if (IsOutsideObjMemory)
       return nullptr;
-    }
     return Objects[Idx].get();
   }
 

@@ -153,6 +153,8 @@ bool shouldNotStubFunc(Function &F, TargetLibraryInfo &TLI) {
   // functions
   return StringSwitch<bool>(F.getName())
       .Case("printf", true)
+      .Case("malloc", true)
+      .Case("free", true)
       .Case("__cxa_throw", true)
       .Default(false);
 }
