@@ -39,7 +39,9 @@ if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 
-. "$SCRIPT_DIR/enable.sh" "/usr/WS1/$USER/opt/input-gen-release"
+LLVM_INSTALL_DIR="/usr/WS1/$USER/opt/input-gen-release"
+
+. "$SCRIPT_DIR/enable.sh" "$LLVM_INSTALL_DIR"
 export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
 
 function run() {
@@ -51,10 +53,13 @@ function run() {
         --precompile-rts \
         --input-gen-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-input-gen.cpp")" \
         --input-run-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-run.cpp")" \
-        --input-gen-num 1 \
+        --input-gen-num 5 \
         --input-gen-num-retries 5 \
         --input-gen-timeout 5 \
         --input-run-timeout 5 \
-        --num-procs="$NUM_CPU" $ADDITIONAL_FLAGS
+        --num-procs="$NUM_CPU" $ADDITIONAL_FLAGS \
+        --coverage-statistics \
+        --coverage-runtime "$(readlink -f "$LLVM_INSTALL_DIR/lib/clang/19/lib/x86_64-unknown-linux-gnu/libclang_rt.profile.a")"
+
 }
 run

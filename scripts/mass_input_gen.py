@@ -68,9 +68,9 @@ def pretty_print_statistics(results):
     print('}')
 
 def aggregate_statistics(stats):
-    empty = igm.InputGenModule().get_empty_statistics()
+    empty = igm.get_empty_statistics()
     agg_stats = functools.reduce(
-        igm.InputGenModule().add_statistics, stats, empty)
+        igm.add_statistics, stats, empty)
     return agg_stats
 
 def handle_single_module_i(i):
