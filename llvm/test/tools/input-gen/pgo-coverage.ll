@@ -1,7 +1,11 @@
-; RUN: mkdir -p /tmp/test1
-; RUN: input-gen --verify --output-dir /tmp/test1 --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp --instrumented-module-for-coverage --profiling-runtime-path=/tmp/llvm-project/build/lib/clang/19/lib/x86_64-unknown-linux-gnu/libclang_rt.profile.a %s
-; RUN: %S/run_all.sh /tmp/test1
-; RUN: llvm-profdata merge /tmp/test1/i64.profraw /tmp/test1/0.profraw -o /tmp/test1/coverage.prof
+; RUN: mkdir -p %t
+; RUN: input-gen --verify --output-dir %t --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile %s
+; RUN: %S/run_all.sh %t
+; RUN: llvm-profdata merge %t/i64.profraw %t/0.profraw -o %t/coverage.prof
+; RUN: mbb-pgo-info --bc-path=%s --profile-path=%t/coverage.prof | FileCheck %s
+; RUN: echo %libclang_rt_profile > /tmp/test2.txt
+
+; CHECK: "NumBlocksExecuted": 1
 
 define dso_local i64 @i64(ptr noundef %LL) local_unnamed_addr #0 {
 entry:
