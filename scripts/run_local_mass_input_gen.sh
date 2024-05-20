@@ -44,7 +44,7 @@ export PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
 
 function run() {
     $JUG_RUN "$SCRIPT" $DASHDASH \
-        --dataset "/p/vast1/LExperts/ComPile-Public" \
+        --dataset "/p/vast1/LExperts/ComPile-Public-V2" \
         --outdir "/l/ssd/$USER/compile-input-gen-out/" \
         --start "$START" \
         --end "$END" \
