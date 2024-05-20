@@ -342,8 +342,8 @@ struct InputGenRTTy {
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
     assert(GlobalPtr);
     size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
-    [[maybe_unused]] bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
-    bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
+    bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
+    [[maybe_unused]] bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
     assert(IsExistingObj || IsOutsideObjMemory);
     if (IsExistingObj) {
       INPUTGEN_DEBUG(std::cerr << "Access: " << (void *)GlobalPtr << " Obj #"
