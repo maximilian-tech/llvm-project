@@ -142,6 +142,7 @@ private:
   CallbackCollectionTy ArgGenCallback;
 
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
+  FunctionCallee UseCallback;
 };
 
 class ModuleInputGenInstrumenter {

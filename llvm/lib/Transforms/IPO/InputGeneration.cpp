@@ -723,6 +723,7 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       M.getOrInsertFunction(Prefix + "memcpy", PtrTy, PtrTy, PtrTy, Int64Ty);
   InputGenMemset =
       M.getOrInsertFunction(Prefix + "memset", PtrTy, PtrTy, Int8Ty, Int64Ty);
+  UseCallback = M.getOrInsertFunction(Prefix + "use", VoidTy, PtrTy, Int32Ty);
 }
 
 void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
@@ -984,7 +985,15 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
   for (auto &Arg : F.args())
     Args.push_back(
         constructTypeUsingCallbacks(M, IRB, ArgGenCallback, Arg.getType()));
-  IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
+  auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
+  if (Ret->getType()->isVoidTy())
+    return;
+  auto *Alloca = IRB.CreateAlloca(Ret->getType());
+  IRB.CreateStore(Ret, Alloca);
+  IRB.CreateCall(
+      UseCallback,
+      {Alloca, IRB.getInt32(F.getParent()->getDataLayout().getTypeAllocSize(
+                   Ret->getType()))});
 }
 
 void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
@@ -1050,7 +1059,15 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
   };
   for (auto &Arg : F.args())
     Args.push_back(HandleType(Arg.getType()));
-  IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
+  auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
+  if (Ret->getType()->isVoidTy())
+    return;
+  auto *Alloca = IRB.CreateAlloca(Ret->getType());
+  IRB.CreateStore(Ret, Alloca);
+  IRB.CreateCall(
+      UseCallback,
+      {Alloca, IRB.getInt32(F.getParent()->getDataLayout().getTypeAllocSize(
+                   Ret->getType()))});
 }
 
 void InputGenInstrumenter::instrumentFunction(Function &F) {
