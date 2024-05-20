@@ -315,6 +315,16 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
   return Access;
 }
 
+void InputGenInstrumenter::instrumentCmp(ICmpInst *Cmp) {
+  Type *Ty = Cmp->getOperand(0)->getType();
+  if (!Ty->isPointerTy())
+    return;
+
+  IRBuilder<> IRB(Cmp);
+  IRB.CreateCall(CmpPtrCallback, {Cmp->getOperand(0), Cmp->getOperand(1),
+                                  IRB.getInt32(Cmp->getPredicate())});
+}
+
 void InputGenInstrumenter::instrumentMop(const InterestingMemoryAccess &Access,
                                          const DataLayout &DL) {
 
@@ -754,6 +764,8 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
   InputGenMemset =
       M.getOrInsertFunction(Prefix + "memset", PtrTy, PtrTy, Int8Ty, Int64Ty);
   UseCallback = M.getOrInsertFunction(Prefix + "use", VoidTy, PtrTy, Int32Ty);
+  CmpPtrCallback =
+      M.getOrInsertFunction(Prefix + "cmp_ptr", PtrTy, PtrTy, PtrTy, Int32Ty);
 }
 
 void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
@@ -1331,21 +1343,25 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
 void InputGenInstrumenter::instrumentFunction(Function &F) {
   LLVM_DEBUG(dbgs() << "INPUTGEN instrumenting:\n" << F.getName() << "\n");
 
-  SmallVector<InterestingMemoryAccess, 16> ToInstrument;
+  SmallVector<InterestingMemoryAccess, 16> ToInstrumentMem;
+  SmallVector<ICmpInst *, 16> ToInstrumentCmp;
 
   // Fill the set of memory operations to instrument.
   for (auto &I : instructions(F))
     if (auto IMA = isInterestingMemoryAccess(&I))
-      ToInstrument.push_back(*IMA);
-
-  if (ToInstrument.empty()) {
+      ToInstrumentMem.push_back(*IMA);
+    else if (auto *Cmp = dyn_cast<ICmpInst>(&I))
+      ToInstrumentCmp.push_back(Cmp);
+  if (ToInstrumentMem.empty() && ToInstrumentCmp.empty()) {
     LLVM_DEBUG(dbgs() << "INPUTGEN nothing to instrument in " << F.getName()
                       << "\n");
   }
 
   auto DL = F.getParent()->getDataLayout();
 
-  for (auto &IMA : ToInstrument) {
+  for (auto *Cmp : ToInstrumentCmp)
+    instrumentCmp(Cmp);
+  for (auto &IMA : ToInstrumentMem) {
     if (isa<MemIntrinsic>(IMA.I))
       instrumentMemIntrinsic(cast<MemIntrinsic>(IMA.I));
     else
@@ -1353,6 +1369,6 @@ void InputGenInstrumenter::instrumentFunction(Function &F) {
     NumInstrumented++;
   }
 
-  LLVM_DEBUG(dbgs() << "INPUTGEN done instrumenting: " << ToInstrument.size()
+  LLVM_DEBUG(dbgs() << "INPUTGEN done instrumenting: " << ToInstrumentMem.size()
                     << " instructions in " << F.getName() << "\n");
 }
