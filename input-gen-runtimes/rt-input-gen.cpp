@@ -340,15 +340,19 @@ struct InputGenRTTy {
   // Returns nullptr if it is not an object managed by us - a stack pointer or
   // memory allocated by malloc
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
+    assert(GlobalPtr);
     size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
-    INPUTGEN_DEBUG(std::cerr << "Access: " << (void *)GlobalPtr << " Obj #"
-                             << Idx << std::endl);
     [[maybe_unused]] bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
     bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
     assert(IsExistingObj || IsOutsideObjMemory);
-    if (IsOutsideObjMemory)
-      return nullptr;
-    return Objects[Idx].get();
+    if (IsExistingObj) {
+      INPUTGEN_DEBUG(std::cerr << "Access: " << (void *)GlobalPtr << " Obj #"
+                               << Idx << std::endl);
+      return Objects[Idx].get();
+    }
+    INPUTGEN_DEBUG(std::cerr << "Access to memory not handled by us: "
+                             << (void *)GlobalPtr << std::endl);
+    return nullptr;
   }
 
   template <typename T> T getNewArg() {
