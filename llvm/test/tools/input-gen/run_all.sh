@@ -13,9 +13,9 @@ function run() {
     run="$1/input-gen.module.run.a.out"
     for i in "$gen".input."$func_id".*.bin; do
       if [ "$TYPE" == NAME ]; then
-        "$run" "$i" --name "$func_name" 2> "$i".run.err.out > "$i".run.log.out
+        LLVM_PROFILE_FILE=$1/$func_name.profraw "$run" "$i" --name "$func_name" 2> "$i".run.err.out > "$i".run.log.out
       else
-        "$run" "$i" --file "$1/available_functions" "$func_id" 2> "$i".run.err.out > "$i".run.log.out
+        LLVM_PROFILE_FILE=$1/$func_id.profraw "$run" "$i" --file "$1/available_functions" "$func_id" 2> "$i".run.err.out > "$i".run.log.out
       fi
     done;
   done < "$1/available_functions"

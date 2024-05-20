@@ -130,11 +130,14 @@ bool isLibCGlobal(StringRef Name) {
 }
 
 bool shouldNotStubGV(GlobalVariable &GV) {
-  return isLandingPadType(GV) || isLibCGlobal(GV.getName()) ||
-         StringSwitch<bool>(GV.getName())
-             .Case("llvm.used", true)
-             .Case("llvm.compiler.used", true)
-             .Default(false);
+  if (isLandingPadType(GV) || isLibCGlobal(GV.getName()))
+    return true;
+  else if (GV.getName() == "llvm.used" || GV.getName() == "llvm.compiler.used")
+    return true;
+  else if (GV.getName().starts_with("__llvm") ||
+           GV.getName().starts_with("__prof"))
+    return true;
+  return false;
 }
 
 bool shouldPreserveGVName(GlobalVariable &GV) { return shouldNotStubGV(GV); }

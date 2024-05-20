@@ -20,6 +20,8 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
+#include "llvm/Transforms/Instrumentation/InstrProfiling.h"
+#include "llvm/Transforms/Instrumentation/PGOInstrumentation.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
@@ -65,6 +67,14 @@ static cl::opt<std::string> ClFunction("function", cl::cat(InputGenCategory));
 static cl::opt<bool>
     ClOptimizeBeforeInstrumenting("optimize-before-instrumenting",
                                   cl::cat(InputGenCategory));
+
+static cl::opt<bool>
+    ClInstrumentModuleForCoverage("instrumented-module-for-coverage",
+                                  cl::cat(InputGenCategory), cl::init(false));
+
+static cl::opt<std::string> ClProfilingRuntimePath("profiling-runtime-path",
+                                                   cl::cat(InputGenCategory),
+                                                   cl::init(""));
 
 constexpr char ToolName[] = "input-gen";
 
@@ -223,6 +233,12 @@ public:
     PB.registerLoopAnalyses(LAM);
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
+    ModulePassManager MPM;
+
+    if (Mode == llvm::IG_Run && ClInstrumentModuleForCoverage)
+      MPM.addPass(PGOInstrumentationGen());
+    MPM.run(*InstrM, MAM);
+
     if (ClOptimizeBeforeInstrumenting) {
       ModulePassManager MPM =
           PB.buildPerModuleDefaultPipeline(OptimizationLevel::O1);
@@ -261,6 +277,13 @@ public:
         continue;
       }
     }
+
+    // Lower profiling intrinsics if we have any so that we can pull PGO data
+    // out.
+    ModulePassManager MPM2;
+    MPM2.addPass(InstrProfilingLoweringPass());
+    MPM2.run(*InstrM, MAM);
+
     std::string BcFileName =
         ClOutputDir + "/" + "input-gen.module." + ModeStr + ".bc";
     std::string ExecutableFileName =
@@ -341,9 +364,13 @@ public:
                          std::string RuntimeName) {
     if (ClCompileInputGenExecutables) {
       outs() << "Compiling " << ExecutableName << "\n";
-      SmallVector<StringRef, 10> Args = {Clang,       "-fopenmp",    "-ldl",
-                                         "-rdynamic", RuntimeName,   ModuleName,
-                                         "-o",        ExecutableName};
+      SmallVector<StringRef, 10> Args = {Clang,         "-ldl",     "-rdynamic",
+                                         RuntimeName,   ModuleName, "-o",
+                                         ExecutableName};
+      if (ClInstrumentModuleForCoverage) {
+        Args.push_back("-u__llvm_profile_runtime");
+        Args.push_back(ClProfilingRuntimePath);
+      }
       if (ClDebug) {
         Args.push_back("-g");
         Args.push_back("-O0");
@@ -378,6 +405,13 @@ int main(int argc, char **argv) {
 
   ExitOnError ExitOnErr("input-gen: ");
   LLVMContext Context;
+
+  if (ClInstrumentModuleForCoverage && ClProfilingRuntimePath.empty()) {
+    ExitOnErr(
+        make_error<StringError>("A profile runtime path needs to be set when "
+                                "instrumenting the module for coverage",
+                                errc::invalid_argument));
+  }
 
   SMDiagnostic Diag;
   std::unique_ptr<Module> M = parseIRFile(ClInputFilename, Diag, Context);
