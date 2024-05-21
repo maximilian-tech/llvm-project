@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -48,10 +49,14 @@ template <typename T> T getNewValue() {
 }
 
 extern "C" {
+extern VoidPtrTy __inputrun_function_pointers[];
+extern uint32_t __inputrun_num_function_pointers;
+
 void __inputrun_unreachable(int32_t No, const char *Name) {
   printf("Reached unreachable %i due to '%s'\n", No, Name ? Name : "n/a");
   exit(0);
 }
+
 void __inputrun_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
                        int32_t GlobalSize) {
   assert(Globals.size() > CurGlobal);
@@ -64,7 +69,7 @@ void __inputrun_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
   CurGlobal++;
 }
 
-VoidPtrTy __inputgen_select_fp(VoidPtrTy* FPCandidates, uint64_t N) {
+VoidPtrTy __inputgen_select_fp(VoidPtrTy *FPCandidates, uint64_t N) {
   assert(FunctionPtrs.size() > CurFunctionPtr);
   auto *FunctionPtr = FPCandidates[FunctionPtrs[CurFunctionPtr]];
   CurFunctionPtr++;
@@ -198,6 +203,15 @@ int main(int argc, char **argv) {
           Obj.Start - Obj.OutputOffset + PtrOffset);
       RelocatePointer(PtrLoc, "Obj");
     }
+    uintptr_t NumFPtrs = readV<uintptr_t>(Input);
+    INPUTGEN_DEBUG(printf("O #%u NFP %lu\n", I, NumFPtrs));
+    for (uintptr_t J = 0; J < NumFPtrs; J++) {
+      auto PtrOffset = readV<intptr_t>(Input);
+      auto FPtrIdx = readV<uint32_t>(Input);
+      INPUTGEN_DEBUG(printf("FP at %ld : %u\n", PtrOffset, FPtrIdx));
+      *reinterpret_cast<VoidPtrTy *>(Obj.Start - Obj.OutputOffset + PtrOffset) =
+          __inputrun_function_pointers[FPtrIdx];
+    }
   }
 
   uint32_t NumGenVals = readV<uint32_t>(Input);
@@ -217,7 +231,7 @@ int main(int argc, char **argv) {
   uint32_t NumGenFunctionPtrs = readV<uint32_t>(Input);
   INPUTGEN_DEBUG(printf("NFP %u\n", NumGenFunctionPtrs));
   FunctionPtrs.reserve(NumGenFunctionPtrs);
-  for(uint32_t I = 0; I < NumGenFunctionPtrs; I++) {
+  for (uint32_t I = 0; I < NumGenFunctionPtrs; I++) {
     auto FpIdx = readV<intptr_t>(Input);
     FunctionPtrs.push_back(FpIdx);
     INPUTGEN_DEBUG(printf("FP #%u -> #%lu\n", I, FpIdx));

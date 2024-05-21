@@ -147,17 +147,11 @@ define internal void @usedByGlobal() {
 @G = global ptr @usedByGlobal
 
 define void @broker(ptr %unknown) !callback !0 {
-; OWRDL-LABEL: @broker(
-;
-; CWRLD-LABEL: @broker(
-;
   call void %unknown()
   ret void
 }
 
 define void @func6() {
-; CHECK-LABEL: @func6(
-;
   call void @broker(ptr @func3)
   ret void
 }
@@ -173,6 +167,16 @@ define void @func7(ptr %unknown) {
   ret void
 }
 
+define void @func8(ptr %another_unknown) {
+  call void @broker(ptr %another_unknown)
+  ret void
+}
+
+define void @func9(ptr %mem) {
+  %1 = load ptr, ptr %mem
+  call void @broker(ptr %1)
+  ret void
+}
 
 ;define void @as_cast(ptr %arg) {
 ;; OWRDL-LABEL: @as_cast(

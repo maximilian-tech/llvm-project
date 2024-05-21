@@ -300,6 +300,7 @@ public:
         continue;
       }
     }
+    MIGI.instrumentFunctionPtrs(*InstrM);
 
     postprocessModule(*InstrM, Mode);
 
