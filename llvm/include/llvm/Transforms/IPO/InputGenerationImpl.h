@@ -1,3 +1,4 @@
+#include "llvm/Transforms/Utils/ValueMapper.h"
 #ifndef LLVM_TRANSFORMS_INSTRUMENTATION_INPUTGENERATIONIMPL_H
 #define LLVM_TRANSFORMS_INSTRUMENTATION_INPUTGENERATIONIMPL_H
 
@@ -45,6 +46,8 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cstdint>
 
+#include "InputGenerationTypes.h"
+
 namespace llvm {
 
 enum IGInstrumentationModeTy { IG_Record, IG_Generate, IG_Run };
@@ -77,7 +80,8 @@ public:
   InputGenInstrumenter(Module &M, AnalysisManager<Module> &MAM,
                        IGInstrumentationModeTy Mode,
                        bool InstrumentedForCoverage)
-      : Mode(Mode), MAM(MAM), InstrumentedForCoverage(InstrumentedForCoverage) {
+      : Mode(Mode), MAM(MAM), M(M),
+        InstrumentedForCoverage(InstrumentedForCoverage) {
     Ctx = &(M.getContext());
     PtrTy = PointerType::getUnqual(*Ctx);
     Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
@@ -100,6 +104,9 @@ public:
   std::optional<InterestingMemoryAccess>
   isInterestingMemoryAccess(Instruction *I) const;
 
+  std::array<Value *, 2> getBranchHints(Value *V, IRBuilderBase &IRB,
+                                        ValueToValueMapTy *VMap = nullptr);
+  std::array<Value *, 2> getEmptyBranchHints();
   void instrumentMop(const InterestingMemoryAccess &Access,
                      const DataLayout &DL);
   void instrumentAddress(const InterestingMemoryAccess &Access,
@@ -107,7 +114,7 @@ public:
   void emitMemoryAccessCallback(IRBuilderBase &IRB, Value *Addr, Value *V,
                                 Type *AccessTy, int32_t AllocSize,
                                 InterestingMemoryAccess::KindTy Kind,
-                                Value *Object);
+                                Value *Object, Value *ValueToReplace);
   void instrumentMaskedLoadOrStore(const InterestingMemoryAccess &Access,
                                    const DataLayout &DL);
   void instrumentMemIntrinsic(MemIntrinsic *MI);
@@ -115,7 +122,9 @@ public:
   void instrumentFunction(Function &F);
   void instrumentModuleForEntryPoint(Function &F);
   Value *constructTypeUsingCallbacks(Module &M, IRBuilderBase &IRB,
-                                     CallbackCollectionTy &CC, Type *T);
+                                     CallbackCollectionTy &CC, Type *T,
+                                     Value *ValueToReplace,
+                                     ValueToValueMapTy *VMap);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F, bool UniqName);
   void createRunEntryPoint(Function &F, bool UniqName);
@@ -143,6 +152,8 @@ public:
   bool shouldNotStubGV(GlobalVariable &GV);
 
 private:
+  Module &M;
+
   CallbackCollectionTy InputGenMemoryAccessCallback;
   CallbackCollectionTy StubValueGenCallback;
   CallbackCollectionTy ArgGenCallback;

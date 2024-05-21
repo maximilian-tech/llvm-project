@@ -20,11 +20,30 @@
 
 #include "rt.hpp"
 
+#include "../llvm/include/llvm/Transforms/IPO/InputGenerationTypes.h"
+
 namespace {
 int VERBOSE = 0;
 }
 
+using BranchHint = llvm::inputgen::BranchHint;
+
 static constexpr intptr_t MinObjAllocation = 64;
+
+template <typename T>
+static void dumpBranchHints(BranchHint *BHs, int32_t BHSize) {
+  for (int I = 0; I < BHSize; I++) {
+    auto &BH = BHs[I];
+    std::cerr << "BranchHint ";
+#define DUMPBF(FIELD) std::cerr << #FIELD " " << BH.FIELD << " "
+    DUMPBF(Kind);
+    DUMPBF(Signed);
+    DUMPBF(Frequency);
+#undef DUMPBF
+    if constexpr (!std::is_same<__int128, T>::value)
+      std::cerr << "Val " << *reinterpret_cast<T *>(BH.Val) << std::endl;
+  }
+}
 
 template <typename T> static T divFloor(T A, T B) {
   assert(B > 0);
@@ -355,16 +374,18 @@ struct InputGenRTTy {
     return nullptr;
   }
 
-  template <typename T> T getNewArg() {
+  template <typename T> T getNewArg(BranchHint *BHs, int32_t BHSize) {
     T V = getNewValue<T>();
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
     NumArgs++;
+    INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
     return V;
   }
 
-  template <typename T> T getNewStub() {
+  template <typename T> T getNewStub(BranchHint *BHs, int32_t BHSize) {
     T V = getNewValue<T>(/*Stub=*/true);
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
+    INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
     return V;
   }
 
@@ -395,8 +416,11 @@ struct InputGenRTTy {
       Obj->write<T>(Val, OA.globalPtrToLocalPtr(Ptr), Size);
   }
 
-  template <typename T> T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size) {
+  template <typename T>
+  T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
+         int32_t BHSize) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
+    INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
     if (Obj)
       return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size);
     return *reinterpret_cast<T *>(Ptr);
@@ -581,7 +605,7 @@ VoidPtrTy __inputgen_memmove(VoidPtrTy Tgt, VoidPtrTy Src, uint64_t N) {
   VoidPtrTy SrcIt = Src;
   VoidPtrTy TgtIt = Tgt;
   for (uintptr_t I = 0; I < N; ++I, ++SrcIt, ++TgtIt) {
-    auto V = getInputGenRT().read<char>(SrcIt, Src, sizeof(char));
+    auto V = getInputGenRT().read<char>(SrcIt, Src, sizeof(char), nullptr, 0);
     getInputGenRT().write<char>(TgtIt, V, sizeof(char));
   }
   return TgtIt;
@@ -599,21 +623,24 @@ VoidPtrTy __inputgen_memset(VoidPtrTy Tgt, char C, uint64_t N) {
 }
 
 #define RW(TY, NAME)                                                           \
-  TY __inputgen_get_##NAME() { return getInputGenRT().getNewStub<TY>(); }      \
+  TY __inputgen_get_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
+    return getInputGenRT().getNewStub<TY>(BHs, BHSize);                        \
+  }                                                                            \
   void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
-                                VoidPtrTy Base, int32_t Kind) {                \
+                                VoidPtrTy Base, int32_t Kind, BranchHint *BHs, \
+                                int32_t BHSize) {                              \
     switch (Kind) {                                                            \
     case 0:                                                                    \
-      getInputGenRT().read<TY>(Ptr, Base, Size);                               \
+      getInputGenRT().read<TY>(Ptr, Base, Size, BHs, BHSize);                  \
       return;                                                                  \
     case 1:                                                                    \
       TY TyVal;                                                                \
       /* We need to reinterpret_cast fp types because they are just bitcast    \
          to the int64_t type in LLVM. */                                       \
-      if (std::is_same<TY, float>::value) {                                    \
+      if constexpr (std::is_same<TY, float>::value) {                          \
         int32_t Trunc = (int32_t)Val;                                          \
         TyVal = *reinterpret_cast<TY *>(&Trunc);                               \
-      } else if (std::is_same<TY, double>::value) {                            \
+      } else if constexpr (std::is_same<TY, double>::value) {                  \
         TyVal = *reinterpret_cast<TY *>(&Val);                                 \
       } else {                                                                 \
         TyVal = (TY)Val;                                                       \
@@ -626,14 +653,17 @@ VoidPtrTy __inputgen_memset(VoidPtrTy Tgt, char C, uint64_t N) {
   }
 
 #define RWREF(TY, NAME)                                                        \
-  TY __inputgen_get_##NAME() { return getInputGenRT().getNewStub<TY>(); }      \
+  TY __inputgen_get_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
+    return getInputGenRT().getNewStub<TY>(BHs, BHSize);                        \
+  }                                                                            \
   void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
-                                VoidPtrTy Base, int32_t Kind) {                \
+                                VoidPtrTy Base, int32_t Kind, BranchHint *BHs, \
+                                int32_t BHSize) {                              \
     static_assert(sizeof(TY) > 8);                                             \
     TY TyVal;                                                                  \
     switch (Kind) {                                                            \
     case 0:                                                                    \
-      getInputGenRT().read<TY>(Ptr, Base, Size);                               \
+      getInputGenRT().read<TY>(Ptr, Base, Size, BHs, BHSize);                  \
       return;                                                                  \
     case 1:                                                                    \
       TyVal = *(TY *)Val;                                                      \
@@ -657,7 +687,9 @@ RWREF(long double, x86_fp80)
 #undef RW
 
 #define ARG(TY, NAME)                                                          \
-  TY __inputgen_arg_##NAME() { return getInputGenRT().getNewArg<TY>(); }
+  TY __inputgen_arg_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
+    return getInputGenRT().getNewArg<TY>(BHs, BHSize);                         \
+  }
 
 ARG(bool, i1)
 ARG(char, i8)

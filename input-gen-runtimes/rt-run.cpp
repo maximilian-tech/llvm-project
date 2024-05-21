@@ -58,7 +58,7 @@ void __inputgen_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
 }
 
 #define RW(TY, NAME)                                                           \
-  TY __inputrun_get_##NAME() { return getNewValue<TY>(); }
+  TY __inputrun_get_##NAME(void *, int32_t) { return getNewValue<TY>(); }
 
 RW(bool, i1)
 RW(char, i8)

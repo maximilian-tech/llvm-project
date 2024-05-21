@@ -14,13 +14,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/InputGeneration.h"
-#include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/IR/Attributes.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/Intrinsics.h"
-#include "llvm/Transforms/IPO/InputGenerationImpl.h"
-
 #include "llvm/ADT/EnumeratedArray.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -29,19 +24,27 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Argument.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
@@ -56,10 +59,12 @@
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/TargetParser/X86TargetParser.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cstdint>
 #include <memory>
 
@@ -107,6 +112,12 @@ static cl::opt<std::string>
     ClEntryPoint("input-gen-entry-point",
                  cl::desc("Entry point identification (via name or #)."),
                  cl::Hidden, cl::init("main"));
+
+static cl::opt<bool>
+    ClProvideBranchHints("input-gen-provide-branch-hints",
+                         cl::desc("Provide information on values used by "
+                                  "branches to the input gen runtime"),
+                         cl::Hidden, cl::init(true));
 
 STATISTIC(NumInstrumented, "Number of instrumented instructions");
 
@@ -376,7 +387,7 @@ void InputGenInstrumenter::instrumentMaskedLoadOrStore(
         }
         int32_t AllocSize = DL.getTypeAllocSize(ElTy);
         emitMemoryAccessCallback(IRB, GEP, V, ElTy, AllocSize, Access.Kind,
-                                 Object);
+                                 Object, nullptr);
       });
 }
 
@@ -389,9 +400,9 @@ void InputGenInstrumenter::instrumentAddress(
   if (isa<AllocaInst>(Object))
     return;
 
-  std::function<void(Type * TheType, Value * TheAddr, Value * TheValue)>
-      HandleType;
-  HandleType = [&](Type *TheType, Value *TheAddr, Value *TheValue) {
+  std::function<void(Type *, Value *, Value *, Value *)> HandleType;
+  HandleType = [&](Type *TheType, Value *TheAddr, Value *TheValue,
+                   Value *ValueToReplace) {
     if (auto *ST = dyn_cast<StructType>(TheType)) {
       for (unsigned It = 0; It < ST->getNumElements(); It++) {
         Type *ElTy = ST->getElementType(It);
@@ -409,7 +420,7 @@ void InputGenInstrumenter::instrumentAddress(
           // Unimplemented, but we abort() in the runtime
           break;
         }
-        HandleType(ElTy, GEP, V);
+        HandleType(ElTy, GEP, V, nullptr);
       }
     } else if (auto *VT = dyn_cast<VectorType>(TheType)) {
       Type *ElTy = VT->getElementType();
@@ -430,7 +441,7 @@ void InputGenInstrumenter::instrumentAddress(
             // Unimplemented, but we abort() in the runtime
             break;
           }
-          HandleType(ElTy, GEP, V);
+          HandleType(ElTy, GEP, V, nullptr);
         }
       } else {
         llvm_unreachable("Scalable vectors unsupported.");
@@ -438,15 +449,26 @@ void InputGenInstrumenter::instrumentAddress(
     } else {
       int32_t AllocSize = DL.getTypeAllocSize(TheType);
       emitMemoryAccessCallback(IRB, TheAddr, TheValue, TheType, AllocSize,
-                               Access.Kind, Object);
+                               Access.Kind, Object, ValueToReplace);
     }
   };
-  HandleType(Access.AccessTy, Access.Addr, Access.V);
+  Value *ValueToReplace = nullptr;
+  switch (Access.Kind) {
+  case InterestingMemoryAccess::READ:
+  case InterestingMemoryAccess::READ_THEN_WRITE:
+    ValueToReplace = Access.I;
+    break;
+  case InterestingMemoryAccess::WRITE:
+    ValueToReplace = nullptr;
+    break;
+  }
+  HandleType(Access.AccessTy, Access.Addr, Access.V, ValueToReplace);
 }
 
 void InputGenInstrumenter::emitMemoryAccessCallback(
     IRBuilderBase &IRB, Value *Addr, Value *V, Type *AccessTy,
-    int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object) {
+    int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object,
+    Value *ValueToReplace) {
 
   Value *Val;
   if (V) {
@@ -470,8 +492,11 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
     Val = ConstantInt::getNullValue(Int64Ty);
   }
 
-  Value *Args[] = {Addr, Val, ConstantInt::get(Int32Ty, AllocSize), Object,
-                   ConstantInt::get(Int32Ty, Kind)};
+  SmallVector<Value *, 7> Args = {Addr, Val,
+                                  ConstantInt::get(Int32Ty, AllocSize), Object,
+                                  ConstantInt::get(Int32Ty, Kind)};
+  auto Hints = getBranchHints(ValueToReplace, IRB);
+  Args.insert(Args.end(), Hints.begin(), Hints.end());
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
   if (!Fn.getCallee()) {
     LLVM_DEBUG(dbgs() << "No memory access callback for " << *AccessTy << "\n");
@@ -713,13 +738,13 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
   Type *Types[] = {Int1Ty,   Int8Ty, Int16Ty, Int32Ty,  Int64Ty,
                    Int128Ty, PtrTy,  FloatTy, DoubleTy, X86_FP80Ty};
   for (Type *Ty : Types) {
-    InputGenMemoryAccessCallback[Ty] =
-        M.getOrInsertFunction(Prefix + "access_" + ::getTypeName(Ty), VoidTy,
-                              PtrTy, Int64Ty, Int32Ty, PtrTy, Int32Ty);
-    StubValueGenCallback[Ty] =
-        M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty);
-    ArgGenCallback[Ty] =
-        M.getOrInsertFunction(Prefix + "arg_" + ::getTypeName(Ty), Ty);
+    InputGenMemoryAccessCallback[Ty] = M.getOrInsertFunction(
+        Prefix + "access_" + ::getTypeName(Ty), VoidTy, PtrTy, Int64Ty, Int32Ty,
+        PtrTy, Int32Ty, PtrTy, Int32Ty);
+    StubValueGenCallback[Ty] = M.getOrInsertFunction(
+        Prefix + "get_" + ::getTypeName(Ty), Ty, PtrTy, Int32Ty);
+    ArgGenCallback[Ty] = M.getOrInsertFunction(
+        Prefix + "arg_" + ::getTypeName(Ty), Ty, PtrTy, Int32Ty);
   }
 
   InputGenMemmove =
@@ -760,8 +785,26 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
     if (RTy->isVoidTy())
       IRB.CreateRetVoid();
     else
-      IRB.CreateRet(
-          constructTypeUsingCallbacks(M, IRB, StubValueGenCallback, RTy));
+      IRB.CreateRet(constructTypeUsingCallbacks(M, IRB, StubValueGenCallback,
+                                                RTy, nullptr, nullptr));
+
+    if (RTy->isVoidTy())
+      continue;
+
+    SmallVector<CallBase *> ToStub;
+    for (auto *User : F.users())
+      if (auto *CB = dyn_cast<CallBase>(User))
+        if (CB->getCalledFunction() == &F)
+          ToStub.push_back(CB);
+    for (auto *CB : ToStub) {
+      // TODO we may want to simulate throwing in stubs. We would need to tweak
+      // this in that case.
+      IRBuilder<> IRB(CB);
+      Value *V = constructTypeUsingCallbacks(M, IRB, StubValueGenCallback, RTy,
+                                             CB, nullptr);
+      CB->replaceAllUsesWith(V);
+      CB->eraseFromParent();
+    }
   }
 }
 
@@ -924,14 +967,219 @@ void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
   }
 }
 
+using BranchHint = inputgen::BranchHint;
+
+static void findAllBranchValues(Value *V, SmallVector<BranchHint> &BranchValues,
+                                std::function<bool(Value *)> DominatesCallback,
+                                const BlockFrequencyInfo &BFI) {
+  for (auto *U : V->users()) {
+    if (auto *BI = dyn_cast<BranchInst>(U)) {
+      auto *Cond = BI->getCondition();
+      assert(Cond == V);
+      // TODO get branch weights
+      BranchHint BVTrue = {
+          BranchHint::EQ, true, ConstantInt::get(Cond->getType(), 1),
+          BFI.getBlockFreq(BI->getSuccessor(0)).getFrequency()};
+      BranchHint BVFalse = {
+          BranchHint::NE, true, ConstantInt::get(Cond->getType(), 1),
+          BFI.getBlockFreq(BI->getSuccessor(1)).getFrequency()};
+      BranchValues.push_back(BVTrue);
+      BranchValues.push_back(BVFalse);
+    } else if (auto *Cmp = dyn_cast<CmpInst>(U)) {
+      auto *LHS = Cmp->getOperand(0);
+      auto *RHS = Cmp->getOperand(1);
+      Value *Other;
+      if (V == LHS)
+        Other = RHS;
+      else if (V == RHS)
+        Other = LHS;
+      else
+        llvm_unreachable("???");
+
+      BranchHint::KindTy Kind = BranchHint::Invalid;
+      bool Signed = true;
+
+      auto GetNegated = [](BranchHint::KindTy Kind) {
+        switch (Kind) {
+        case BranchHint::EQ:
+          return BranchHint::NE;
+        case BranchHint::NE:
+          return BranchHint::EQ;
+        case BranchHint::LT:
+          return BranchHint::GE;
+        case BranchHint::GT:
+          return BranchHint::LE;
+        case BranchHint::LE:
+          return BranchHint::GT;
+        case BranchHint::GE:
+          return BranchHint::LT;
+        case BranchHint::Invalid:
+          return BranchHint::Invalid;
+        };
+      };
+
+      switch (Cmp->getPredicate()) {
+      case CmpInst::FCMP_OEQ:
+      case CmpInst::FCMP_UEQ:
+      case CmpInst::ICMP_EQ:
+        Kind = BranchHint::EQ;
+        break;
+      case CmpInst::FCMP_OGT:
+      case CmpInst::FCMP_UGT:
+      case CmpInst::ICMP_UGT:
+        Signed = false;
+        [[fallthrough]];
+      case CmpInst::ICMP_SGT:
+        Kind = BranchHint::GT;
+        break;
+      case CmpInst::FCMP_OGE:
+      case CmpInst::FCMP_UGE:
+      case CmpInst::ICMP_UGE:
+        Signed = false;
+        [[fallthrough]];
+      case CmpInst::ICMP_SGE:
+        Kind = BranchHint::GE;
+        break;
+      case CmpInst::FCMP_OLT:
+      case CmpInst::FCMP_ULT:
+      case CmpInst::ICMP_ULT:
+        Signed = false;
+        [[fallthrough]];
+      case CmpInst::ICMP_SLT:
+        Kind = BranchHint::LT;
+        break;
+      case CmpInst::FCMP_OLE:
+      case CmpInst::FCMP_ULE:
+      case CmpInst::ICMP_ULE:
+        Signed = false;
+        [[fallthrough]];
+      case CmpInst::ICMP_SLE:
+        Kind = BranchHint::LE;
+        break;
+      case CmpInst::FCMP_ONE:
+      case CmpInst::FCMP_UNE:
+      case CmpInst::ICMP_NE:
+        Kind = BranchHint::NE;
+        break;
+      default:
+        Kind = BranchHint::Invalid;
+        break;
+      }
+
+      if (DominatesCallback(Other)) {
+        for (auto *CmpUser : Cmp->users()) {
+          if (auto *BI = dyn_cast<BranchInst>(CmpUser)) {
+            BranchHint BVTrue = {
+                Kind, Signed, Other,
+                BFI.getBlockFreq(BI->getSuccessor(0)).getFrequency()};
+            BranchHint BVFalse = {
+                GetNegated(Kind), Signed, Other,
+                BFI.getBlockFreq(BI->getSuccessor(1)).getFrequency()};
+            BranchValues.push_back(BVTrue);
+            BranchValues.push_back(BVFalse);
+          }
+        }
+      }
+    }
+  }
+}
+
+std::array<Value *, 2> InputGenInstrumenter::getEmptyBranchHints() {
+  IRBuilder<> IRB(M.getContext());
+  return {Constant::getNullValue(IRB.getPtrTy()), IRB.getInt32(0)};
+}
+
+std::array<Value *, 2>
+InputGenInstrumenter::getBranchHints(Value *V, IRBuilderBase &IRB,
+                                     ValueToValueMapTy *VMap) {
+  if (!ClProvideBranchHints || !V)
+    return getEmptyBranchHints();
+
+  assert(((!isa<Argument>(V) && !VMap) || (isa<Argument>(V) && VMap)) &&
+         "Need to provide arg mapping only when getting branch hints for arg");
+
+  Function *F;
+  if (auto *Arg = dyn_cast<Argument>(V))
+    F = Arg->getParent();
+  else if (auto *I = dyn_cast<Instruction>(V))
+    F = I->getFunction();
+  else
+    llvm_unreachable(
+        "Branch hint called for value other than instruction or argument");
+
+  FunctionAnalysisManager &FAM =
+      MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  const DominatorTree &DT = FAM.getResult<DominatorTreeAnalysis>(*F);
+  const BlockFrequencyInfo &BFI = FAM.getResult<BlockFrequencyAnalysis>(*F);
+
+  std::function<bool(Value *)> DominatesCallback;
+  if (auto *Arg = dyn_cast<Argument>(V))
+    DominatesCallback = [Arg](Value *Other) -> bool {
+      // Arguments that appear earlier dominate (as we have already generated
+      // them
+      if (auto *OtherArg = dyn_cast<Argument>(Other))
+        return OtherArg->getArgNo() < Arg->getArgNo();
+      // Otherwise only constants and globals can dominate an argument
+      return isa<Constant>(Other) || isa<GlobalValue>(Other);
+    };
+  else if (auto *I = dyn_cast<Instruction>(V))
+    DominatesCallback = [&DT, I](Value *Other) -> bool {
+      return DT.dominates(Other, I->getIterator());
+    };
+  else
+    llvm_unreachable(
+        "Branch hint called for value other than instruction or argument");
+
+  SmallVector<BranchHint> BranchValues;
+
+  findAllBranchValues(V, BranchValues, DominatesCallback, BFI);
+  std::sort(
+      BranchValues.begin(), BranchValues.end(),
+      [](BranchHint &A, BranchHint &B) { return A.Frequency < B.Frequency; });
+
+  IRBuilder<> IRBEntry(F->getContext());
+  IRBEntry.SetInsertPointPastAllocas(IRB.GetInsertPoint()->getFunction());
+
+  Value *Length = IRB.getInt32(BranchValues.size());
+  Value *Array;
+  if (BranchValues.size() == 0) {
+    Array = Constant::getNullValue(IRB.getPtrTy());
+  } else {
+    auto *StructTy =
+        StructType::get(F->getContext(), {IRB.getInt32Ty(), IRB.getInt8Ty(),
+                                          IRB.getPtrTy(), IRB.getInt64Ty()});
+    Array = IRBEntry.CreateAlloca(StructTy, Length);
+    for (unsigned I = 0; I < BranchValues.size(); I++) {
+      const auto &BV = BranchValues[I];
+      Value *Struct = UndefValue::get(StructTy);
+      auto *ValAlloca = IRBEntry.CreateAlloca(BV.Val->getType());
+      Value *ToStore = BV.Val;
+      if (VMap && isa<Argument>(ToStore)) {
+        ToStore = (*VMap)[ToStore];
+        assert(ToStore);
+      }
+      IRB.CreateStore(ToStore, ValAlloca);
+      int Idx = 0;
+      Struct = IRB.CreateInsertValue(Struct, IRB.getInt32(BV.Kind), Idx++);
+      Struct = IRB.CreateInsertValue(Struct, IRB.getInt8(BV.Signed), Idx++);
+      Struct = IRB.CreateInsertValue(Struct, ValAlloca, Idx++);
+      Struct = IRB.CreateInsertValue(Struct, IRB.getInt64(BV.Frequency), Idx++);
+      IRB.CreateStore(Struct, IRB.CreateConstGEP1_64(StructTy, Array, I));
+    }
+  }
+  return {Array, Length};
+}
+
 Value *InputGenInstrumenter::constructTypeUsingCallbacks(
-    Module &M, IRBuilderBase &IRB, CallbackCollectionTy &CC, Type *T) {
+    Module &M, IRBuilderBase &IRB, CallbackCollectionTy &CC, Type *T,
+    Value *ValueToReplace, ValueToValueMapTy *VMap) {
   if (auto *ST = dyn_cast<StructType>(T)) {
     Value *V = UndefValue::get(ST);
     for (unsigned It = 0; It < ST->getNumElements(); It++) {
       Type *ElTy = ST->getElementType(It);
       V = IRB.CreateInsertValue(
-          V, constructTypeUsingCallbacks(M, IRB, CC, ElTy), {It});
+          V, constructTypeUsingCallbacks(M, IRB, CC, ElTy, nullptr, VMap),
+          {It});
     }
     return V;
   } else if (auto *VT = dyn_cast<VectorType>(T)) {
@@ -941,7 +1189,8 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
       Value *V = UndefValue::get(VT);
       for (unsigned It = 0; It < Count; It++) {
         V = IRB.CreateInsertElement(
-            V, constructTypeUsingCallbacks(M, IRB, CC, ElTy), IRB.getInt64(It));
+            V, constructTypeUsingCallbacks(M, IRB, CC, ElTy, nullptr, VMap),
+            IRB.getInt64(It));
       }
       return V;
     } else {
@@ -954,7 +1203,7 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
       IRB.CreateIntrinsic(VoidTy, Intrinsic::trap, {});
       return UndefValue::get(T);
     } else {
-      return IRB.CreateCall(Fn, {});
+      return IRB.CreateCall(Fn, getBranchHints(ValueToReplace, IRB, VMap));
     }
   }
 }
@@ -987,9 +1236,12 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
     EntryPoint->addFnAttr(F.getFnAttribute("min-legal-vector-width"));
 
   SmallVector<Value *> Args;
-  for (auto &Arg : F.args())
-    Args.push_back(
-        constructTypeUsingCallbacks(M, IRB, ArgGenCallback, Arg.getType()));
+  ValueToValueMapTy VMap;
+  for (auto &Arg : F.args()) {
+    Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
+                                               Arg.getType(), &Arg, &VMap));
+    VMap[&Arg] = Args.back();
+  }
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
   if (Ret->getType()->isVoidTy())
     return;
@@ -1034,13 +1286,13 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
     return GEP;
   };
   SmallVector<Value *> Args;
-  std::function<Value *(Type * T)> HandleType;
-  HandleType = [&](Type *T) -> Value * {
+  std::function<Value *(Type *, Value *)> HandleType;
+  HandleType = [&](Type *T, Value *ValueToReplace) -> Value * {
     if (auto *ST = dyn_cast<StructType>(T)) {
       Value *V = UndefValue::get(ST);
       for (unsigned It = 0; It < ST->getNumElements(); It++) {
         Type *ElTy = ST->getElementType(It);
-        V = IRB.CreateInsertValue(V, HandleType(ElTy), {It});
+        V = IRB.CreateInsertValue(V, HandleType(ElTy, nullptr), {It});
       }
       return V;
     } else if (auto *VT = dyn_cast<VectorType>(T)) {
@@ -1049,7 +1301,8 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
         auto Count = VT->getElementCount().getFixedValue();
         Value *V = UndefValue::get(VT);
         for (unsigned It = 0; It < Count; It++) {
-          V = IRB.CreateInsertElement(V, HandleType(ElTy), IRB.getInt64(It));
+          V = IRB.CreateInsertElement(V, HandleType(ElTy, nullptr),
+                                      IRB.getInt64(It));
         }
         return V;
         Args.push_back(V);
@@ -1063,7 +1316,7 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
     }
   };
   for (auto &Arg : F.args())
-    Args.push_back(HandleType(Arg.getType()));
+    Args.push_back(HandleType(Arg.getType(), &Arg));
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
   if (Ret->getType()->isVoidTy())
     return;
@@ -1076,7 +1329,6 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
 }
 
 void InputGenInstrumenter::instrumentFunction(Function &F) {
-
   LLVM_DEBUG(dbgs() << "INPUTGEN instrumenting:\n" << F.getName() << "\n");
 
   SmallVector<InterestingMemoryAccess, 16> ToInstrument;
