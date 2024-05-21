@@ -188,6 +188,7 @@ bool InputGenInstrumenter::shouldNotStubFunc(Function &F,
   // functions
   return StringSwitch<bool>(F.getName())
       .Case("printf", true)
+      .Case("puts", true)
       .Case("malloc", true)
       .Case("free", true)
       .Case("__cxa_throw", true)
