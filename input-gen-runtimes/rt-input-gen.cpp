@@ -289,14 +289,23 @@ struct ObjCmpInfoTy {
   bool Done = false;
 };
 
+struct InputGenConfTy {
+  bool EnablePtrCmpRetry;
+  bool EnableBranchHints;
+  InputGenConfTy() {
+    EnablePtrCmpRetry = getenv("INPUT_GEN_ENABLE_PTR_CMP_RETRY");
+    EnableBranchHints = getenv("INPUT_GEN_ENABLE_BRANCH_HINTS");
+  }
+};
+
 struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir,
                const char *FuncIdent, VoidPtrTy StackPtr, int Seed,
-               std::vector<ObjCmpInfoTy> ObjCmps,
+               InputGenConfTy InputGenConf, std::vector<ObjCmpInfoTy> ObjCmps,
                std::function<void(ObjCmpInfoTy)> *ObjCmpCallback)
-      : ObjCmps(ObjCmps), ObjCmpCallback(ObjCmpCallback), StackPtr(StackPtr),
-        Seed(Seed), FuncIdent(FuncIdent), OutputDir(OutputDir),
-        ExecPath(ExecPath) {
+      : InputGenConf(InputGenConf), ObjCmps(ObjCmps),
+        ObjCmpCallback(ObjCmpCallback), StackPtr(StackPtr), Seed(Seed),
+        FuncIdent(FuncIdent), OutputDir(OutputDir), ExecPath(ExecPath) {
     Gen.seed(Seed);
     if (this->FuncIdent != "") {
       this->FuncIdent += ".";
@@ -321,6 +330,8 @@ struct InputGenRTTy {
     OutputObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
   }
   ~InputGenRTTy() {}
+
+  InputGenConfTy InputGenConf;
 
   std::vector<ObjCmpInfoTy> ObjCmps;
   std::function<void(ObjCmpInfoTy)> *ObjCmpCallback;
@@ -418,6 +429,9 @@ struct InputGenRTTy {
   }
 
   void cmpPtr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
+    if (!InputGenConf.EnablePtrCmpRetry)
+      return;
+
     // Ignore null pointers for now
     if (A == nullptr || B == nullptr)
       return;
@@ -462,21 +476,21 @@ struct InputGenRTTy {
   }
 
   template <typename T> T getNewStub(BranchHint *BHs, int32_t BHSize) {
-    T V = getNewValue<T>(/*Stub=*/true);
+    T V = getNewValue<T>();
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
     INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
     return V;
   }
 
   template <typename T>
-  T getNewValue(bool Stub = false, int Max = DefaultMaxGeneratedValue) {
+  T getNewValue() {
     static_assert(!std::is_pointer<T>::value);
     NumNewValues++;
-    T V = rand() % Max;
+    T V = rand() % DefaultMaxGeneratedValue;
     return V;
   }
 
-  template <> VoidPtrTy getNewValue<VoidPtrTy>(bool Stub, int Max) {
+  template <> VoidPtrTy getNewValue<VoidPtrTy>() {
     NumNewValues++;
     if (rand() % NullPtrProbability) {
       auto Obj = getNewPtr(0);
@@ -846,15 +860,15 @@ int main(int argc, char **argv) {
   if (Start + 1 != End)
     return 1;
 
-  bool EnablePtrCmpRetry = getenv("INPUT_GEN_PTR_CMP_RETRY");
+  InputGenConfTy InputGenConf;
 
   std::function<void()> RunInputGen;
   std::function<void(ObjCmpInfoTy)> CmpInfoCallback;
 
   RunInputGen = [&]() {
-    InputGenRT = new InputGenRTTy(
-        argv[0], OutputDir, FuncIdent.c_str(), StackPtr, I, ObjCmps,
-        EnablePtrCmpRetry ? &CmpInfoCallback : nullptr);
+    InputGenRT =
+        new InputGenRTTy(argv[0], OutputDir, FuncIdent.c_str(), StackPtr, I,
+                         InputGenConf, ObjCmps, &CmpInfoCallback);
     EntryFn(argc, argv);
     InputGenRT->report();
     delete InputGenRT;
