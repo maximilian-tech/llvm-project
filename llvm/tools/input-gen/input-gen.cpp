@@ -76,6 +76,9 @@ static cl::opt<std::string> ClProfilingRuntimePath("profiling-runtime-path",
                                                    cl::cat(InputGenCategory),
                                                    cl::init(""));
 
+static cl::opt<std::string>
+    ClProfilePath("profile-path", cl::cat(InputGenCategory), cl::init(""));
+
 constexpr char ToolName[] = "input-gen";
 
 [[noreturn]] static void fatalError(const Twine &Message) {
@@ -236,9 +239,12 @@ public:
     bool InstrumentForCoverage =
         Mode == llvm::IG_Run && ClInstrumentModuleForCoverage;
 
-    if (InstrumentForCoverage) {
+    if (InstrumentForCoverage || !ClProfilePath.empty()) {
       ModulePassManager MPM;
-      MPM.addPass(PGOInstrumentationGen());
+      if (InstrumentForCoverage)
+        MPM.addPass(PGOInstrumentationGen());
+      if (!ClProfilePath.empty())
+        MPM.addPass(PGOInstrumentationUse(ClProfilePath));
       MPM.run(*InstrM, MAM);
     }
 
