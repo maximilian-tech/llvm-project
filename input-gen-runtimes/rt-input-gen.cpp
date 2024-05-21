@@ -21,6 +21,7 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <type_traits>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 
@@ -138,8 +139,15 @@ struct ObjectTy {
     OutputLimits.update(Offset, Size);
   }
 
+  void setFunctionPtrIdx(VoidPtrTy Ptr, uint32_t Size, VoidPtrTy FPtr, uint32_t FIdx) {
+    intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
+    storeGeneratedValue(FPtr, Offset, Size);
+    FPtrs.insert({Offset, FIdx});
+  }
+
   const size_t Idx;
   std::set<intptr_t> Ptrs;
+  std::unordered_map<intptr_t, uint32_t> FPtrs;
 
 private:
   struct Memory {
@@ -702,6 +710,11 @@ struct InputGenRTTy {
     return nullptr;
   }
 
+  template <> FunctionPtrTy *getNewValue<FunctionPtrTy *>(BranchHint *BHs, int32_t BHSize) {
+    NumNewValues++;
+    return nullptr;
+  }
+
   template <typename T> void write(VoidPtrTy Ptr, T Val, uint32_t Size) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
     if (Obj)
@@ -726,8 +739,14 @@ struct InputGenRTTy {
                           (void *)Global, Obj.Idx, (void *)ReplGlobal));
   }
 
+  void registerFunctionPtrAccess(VoidPtrTy Ptr, uint32_t Size, VoidPtrTy FPtr, uint32_t GlobalFPIdx) {
+    ObjectTy *Obj = globalPtrToObj(Ptr);
+    assert(Obj && "FP Object should just have been created.");
+    Obj->setFunctionPtrIdx( OA.globalPtrToLocalPtr(Ptr), Size, FPtr, GlobalFPIdx);
+  }
+
   intptr_t registerFunctionPtrIdx(size_t N) {
-    auto Offset = rand(false) % N;
+    auto Offset = rand() % N;
     FunctionPtrs.push_back(Offset);
     return Offset;
   }
@@ -834,6 +853,14 @@ struct InputGenRTTy {
                                   MemoryChunks[Obj->Idx].InputOffset + Ptr)));
       }
 
+      writeV<uintptr_t>(InputOut, Obj->FPtrs.size());
+      INPUTGEN_DEBUG(printf("O #%ld NFP %ld\n", Obj->Idx, Obj->FPtrs.size()));
+      for (auto Ptr : Obj->FPtrs) {
+        writeV<intptr_t>(InputOut, Ptr.first);
+        writeV<uint32_t>(InputOut, Ptr.second);
+        INPUTGEN_DEBUG(printf("FP at %ld : %u\n", Ptr.first, Ptr.second));
+      }
+
       assert(Obj->Idx == I);
       I++;
     }
@@ -857,7 +884,7 @@ struct InputGenRTTy {
 
     uint32_t NumGenFunctionPtrs = FunctionPtrs.size();
     writeV<uint32_t>(InputOut, NumGenFunctionPtrs);
-    for(intptr_t FPOffset : FunctionPtrs) {
+    for (intptr_t FPOffset : FunctionPtrs) {
       writeV<intptr_t>(InputOut, FPOffset);
     }
   }
@@ -880,6 +907,9 @@ T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
   if (allUsed(Offset, Size))
     return *OutputLoc;
 
+  if constexpr (std::is_same<T, FunctionPtrTy*>::value)
+    return nullptr;
+
   T Val = getInputGenRT().getNewValue<T>(BHs, BHSize);
   storeGeneratedValue(Val, Offset, Size);
 
@@ -890,6 +920,9 @@ T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
 }
 
 extern "C" {
+extern VoidPtrTy __inputgen_function_pointers[];
+extern uint32_t __inputgen_num_function_pointers;
+
 void __inputgen_version_mismatch_check_v1() {}
 
 void __inputgen_init() {
@@ -906,6 +939,29 @@ void __inputgen_global(int32_t NumGlobals, VoidPtrTy Global,
 
 VoidPtrTy __inputgen_select_fp(VoidPtrTy *PotentialFPs, uint64_t N) {
   return PotentialFPs[getInputGenRT().registerFunctionPtrIdx(N)];
+}
+
+void __inputgen_access_fp(VoidPtrTy Ptr, int32_t Size, VoidPtrTy Base,
+                          VoidPtrTy *PotentialFPs, uint64_t N) {
+  if (!getInputGenRT().read<FunctionPtrTy *>(Ptr, Base, Size, /* BHs */ nullptr, 0)) {
+    VoidPtrTy FP = PotentialFPs[rand() % N];
+    *reinterpret_cast<VoidPtrTy *>(Ptr) = FP;
+    VoidPtrTy *GlobalIt = std::find(
+        __inputgen_function_pointers,
+        __inputgen_function_pointers + __inputgen_num_function_pointers, FP);
+    assert(GlobalIt != __inputgen_function_pointers +
+                           __inputgen_num_function_pointers &&
+           "Function not found in list!");
+    getInputGenRT().registerFunctionPtrAccess(
+        Ptr, Size, FP, GlobalIt - __inputgen_function_pointers);
+    return;
+  }
+  // return an error if the function ptr is not in the potential callee list.
+  if (std::find(PotentialFPs, PotentialFPs + N,
+                *reinterpret_cast<VoidPtrTy *>(Ptr)) == PotentialFPs + N) {
+    std::cerr << "Loaded Value is not a valid function pointer." << std::endl;
+    exit(13);
+  }
 }
 
 // TODO: need to support overlapping Tgt and Src here

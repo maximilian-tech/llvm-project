@@ -129,7 +129,7 @@ public:
                                      CallbackCollectionTy &CC, Type *T,
                                      Value *ValueToReplace,
                                      ValueToValueMapTy *VMap);
-  Value *constructFpFromPotentialCallees(IRBuilderBase &IRB, Argument& Arg);
+  Value *constructFpFromPotentialCallees(const CallBase &Caller, Value& V, IRBuilderBase& IRB);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F, bool UniqName);
   void createRunEntryPoint(Function &F, bool UniqName);
@@ -138,6 +138,7 @@ public:
   Function& stubDeclaration(Module &M, FunctionType& FT, StringRef Suffix);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
   void gatherFunctionPtrCallees(Module &M);
+  void instrumentFunctionPtrSources(Module &M);
   void provideGlobals(Module &M);
   SetVector<Function *> pruneModule(Function &F);
 
@@ -193,6 +194,7 @@ public:
   bool instrumentEntryPoint(Module &, Function &, bool);
   bool instrumentModuleForFunction(Module &, Function &);
   std::unique_ptr<Module> generateEntryPointModule(Module &M, Function &);
+  bool instrumentFunctionPtrs(Module &);
 
 private:
   Triple TargetTriple;
