@@ -8,6 +8,7 @@ set(LLVM_LINK_COMPONENTS
   Analysis
   TransformUtils
   TargetParser
+  Instrumentation
   )
 
 
