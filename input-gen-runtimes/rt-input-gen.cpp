@@ -850,6 +850,7 @@ struct InputGenRTTy {
   }
 };
 
+void *DynLibHandle = nullptr;
 static InputGenRTTy *InputGenRT;
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
@@ -998,6 +999,10 @@ void __inputgen_use(VoidPtrTy Ptr, uint32_t Size) { useValue(Ptr, Size); }
 void __inputgen_cmp_ptr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
   getInputGenRT().cmpPtr(A, B, Predicate);
 }
+void __inputgen_unreachable(int32_t No, const char *Name) {
+  printf("Reached unreachable %i due to '%s'\n", No, Name ? Name : "n/a");
+  exit(0);
+}
 }
 
 std::vector<ObjCmpInfoTy> ObjCmps;
@@ -1042,14 +1047,14 @@ int main(int argc, char **argv) {
   std::cout << "Will generate " << Size << " inputs for function " << FuncName
             << " " << FuncIdent << std::endl;
 
-  void *Handle = dlopen(NULL, RTLD_NOW);
-  if (!Handle) {
+  DynLibHandle = dlopen(NULL, RTLD_NOW);
+  if (!DynLibHandle) {
     std::cout << "Could not dyn load binary" << std::endl;
     std::cout << dlerror() << std::endl;
     return 11;
   }
   typedef void (*EntryFnType)(int, char **);
-  EntryFnType EntryFn = (EntryFnType)dlsym(Handle, FuncName.c_str());
+  EntryFnType EntryFn = (EntryFnType)dlsym(DynLibHandle, FuncName.c_str());
 
   if (!EntryFn) {
     std::cout << "Function " << FuncName << " not found in binary."
@@ -1066,15 +1071,21 @@ int main(int argc, char **argv) {
   std::function<void()> RunInputGen;
   std::function<void(ObjCmpInfoTy)> CmpInfoCallback;
 
+  std::atexit([]() {
+    if (InputGenRT) {
+      InputGenRT->report();
+      delete InputGenRT;
+      InputGenRT = nullptr;
+    }
+    if (DynLibHandle)
+      dlclose(DynLibHandle);
+  });
+
   RunInputGen = [&]() {
     InputGenRT =
         new InputGenRTTy(argv[0], OutputDir, FuncIdent.c_str(), StackPtr, I,
                          InputGenConf, ObjCmps, &CmpInfoCallback);
     EntryFn(argc, argv);
-    InputGenRT->report();
-    delete InputGenRT;
-
-    dlclose(Handle);
     exit(0);
   };
 
@@ -1084,6 +1095,7 @@ int main(int argc, char **argv) {
     INPUTGEN_DEBUG(std::cerr << "Retrying..." << std::endl);
 
     delete InputGenRT;
+    InputGenRT = nullptr;
     RunInputGen();
   };
 

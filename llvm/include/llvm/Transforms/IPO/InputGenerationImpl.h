@@ -1,3 +1,4 @@
+#include "llvm/IR/Instructions.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #ifndef LLVM_TRANSFORMS_INSTRUMENTATION_INPUTGENERATIONIMPL_H
 #define LLVM_TRANSFORMS_INSTRUMENTATION_INPUTGENERATIONIMPL_H
@@ -108,6 +109,7 @@ public:
                                         ValueToValueMapTy *VMap = nullptr);
   std::array<Value *, 2> getEmptyBranchHints();
   void instrumentCmp(ICmpInst *Cmp);
+  void instrumentUnreachable(UnreachableInst *Unreachable);
   void instrumentMop(const InterestingMemoryAccess &Access,
                      const DataLayout &DL);
   void instrumentAddress(const InterestingMemoryAccess &Access,
@@ -120,6 +122,7 @@ public:
                                    const DataLayout &DL);
   void instrumentMemIntrinsic(MemIntrinsic *MI);
 
+  void handleUnreachable(Module &M);
   void instrumentFunction(Function &F);
   void instrumentModuleForEntryPoint(Function &F);
   Value *constructTypeUsingCallbacks(Module &M, IRBuilderBase &IRB,
@@ -162,6 +165,9 @@ private:
   FunctionCallee InputGenMemmove, InputGenMemcpy, InputGenMemset;
   FunctionCallee UseCallback;
   FunctionCallee CmpPtrCallback;
+
+  unsigned UnreachableCounter = 0;
+  FunctionCallee UnreachableCallback;
 
   bool InstrumentedForCoverage;
 };

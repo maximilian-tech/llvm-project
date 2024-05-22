@@ -45,7 +45,11 @@ template <typename T> T getNewValue() {
 }
 
 extern "C" {
-void __inputgen_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
+void __inputrun_unreachable(int32_t No, const char *Name) {
+  printf("Reached unreachable %i due to '%s'\n", No, Name ? Name : "n/a");
+  exit(0);
+}
+void __inputrun_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
                        int32_t GlobalSize) {
   assert(Globals.size() > CurGlobal);
   ObjectTy Obj = Globals[CurGlobal];

@@ -316,6 +316,27 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
   return Access;
 }
 
+void InputGenInstrumenter::instrumentUnreachable(UnreachableInst *Unreachable) {
+  CallBase *NoReturnCB = nullptr;
+  if (&Unreachable->getParent()->front() != Unreachable) {
+    if (auto *CB = dyn_cast<CallBase>(Unreachable->getPrevNode())) {
+      if (CB->hasFnAttr(Attribute::NoReturn))
+        NoReturnCB = CB;
+    }
+  }
+
+  IRBuilder<> IRB(Unreachable);
+  Value *Name = Constant::getNullValue(PtrTy);
+  if (NoReturnCB) {
+    assert(NoReturnCB->getCalledFunction());
+    Name = IRB.CreateGlobalString(NoReturnCB->getCalledFunction()->getName());
+    NoReturnCB->eraseFromParent();
+  }
+
+  IRB.CreateCall(UnreachableCallback,
+                 {IRB.getInt32(UnreachableCounter++), Name});
+}
+
 void InputGenInstrumenter::instrumentCmp(ICmpInst *Cmp) {
   Type *Ty = Cmp->getOperand(0)->getType();
   if (!Ty->isPointerTy())
@@ -617,6 +638,7 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
 
   switch (IGI.Mode) {
   case IG_Run:
+    IGI.handleUnreachable(M);
     break;
   case IG_Generate:
   case IG_Record:
@@ -766,7 +788,9 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       M.getOrInsertFunction(Prefix + "memset", PtrTy, PtrTy, Int8Ty, Int64Ty);
   UseCallback = M.getOrInsertFunction(Prefix + "use", VoidTy, PtrTy, Int32Ty);
   CmpPtrCallback =
-      M.getOrInsertFunction(Prefix + "cmp_ptr", PtrTy, PtrTy, PtrTy, Int32Ty);
+      M.getOrInsertFunction(Prefix + "cmp_ptr", VoidTy, PtrTy, PtrTy, Int32Ty);
+  UnreachableCallback =
+      M.getOrInsertFunction(Prefix + "unreachable", VoidTy, Int32Ty, PtrTy);
 }
 
 void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
@@ -966,7 +990,7 @@ void InputGenInstrumenter::createRecordingEntryPoint(Function &F) {
 void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
   auto DL = M.getDataLayout();
   FunctionCallee GVFn = M.getOrInsertFunction(
-      InputGenCallbackPrefix + "global",
+      getCallbackPrefix(Mode) + "global",
       FunctionType::get(VoidTy, {Int32Ty, PtrTy, PtrTy, Int32Ty}, false));
 
   auto *NumGlobalsVal =
@@ -1360,11 +1384,22 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
                    Ret->getType()))});
 }
 
+void InputGenInstrumenter::handleUnreachable(Module &M) {
+  SmallVector<UnreachableInst *, 16> ToInstrumentUnreachable;
+  for (auto &F : M)
+    for (auto &I : instructions(F))
+      if (auto *Unreachable = dyn_cast<UnreachableInst>(&I))
+        ToInstrumentUnreachable.push_back(Unreachable);
+  for (auto *Unreachable : ToInstrumentUnreachable)
+    instrumentUnreachable(Unreachable);
+}
+
 void InputGenInstrumenter::instrumentFunction(Function &F) {
   LLVM_DEBUG(dbgs() << "INPUTGEN instrumenting:\n" << F.getName() << "\n");
 
   SmallVector<InterestingMemoryAccess, 16> ToInstrumentMem;
   SmallVector<ICmpInst *, 16> ToInstrumentCmp;
+  SmallVector<UnreachableInst *, 16> ToInstrumentUnreachable;
 
   // Fill the set of memory operations to instrument.
   for (auto &I : instructions(F))
@@ -1372,13 +1407,18 @@ void InputGenInstrumenter::instrumentFunction(Function &F) {
       ToInstrumentMem.push_back(*IMA);
     else if (auto *Cmp = dyn_cast<ICmpInst>(&I))
       ToInstrumentCmp.push_back(Cmp);
-  if (ToInstrumentMem.empty() && ToInstrumentCmp.empty()) {
+    else if (auto *Unreachable = dyn_cast<UnreachableInst>(&I))
+      ToInstrumentUnreachable.push_back(Unreachable);
+  if (ToInstrumentMem.empty() && ToInstrumentCmp.empty() &&
+      ToInstrumentUnreachable.empty()) {
     LLVM_DEBUG(dbgs() << "INPUTGEN nothing to instrument in " << F.getName()
                       << "\n");
   }
 
   auto DL = F.getParent()->getDataLayout();
 
+  for (auto *Unreachable : ToInstrumentUnreachable)
+    instrumentUnreachable(Unreachable);
   for (auto *Cmp : ToInstrumentCmp)
     instrumentCmp(Cmp);
   for (auto &IMA : ToInstrumentMem) {
