@@ -981,23 +981,31 @@ void InputGenInstrumenter::createGlobalCalls(Module &M, IRBuilder<> &IRB) {
 }
 
 using BranchHint = inputgen::BranchHint;
+struct BranchHintInfo {
+  BranchHint BH;
+  BasicBlock *BB;
+};
 
-static void findAllBranchValues(Value *V, SmallVector<BranchHint> &BranchValues,
+static void findAllBranchValues(Value *V,
+                                SmallVector<BranchHintInfo> &BranchHints,
                                 std::function<bool(Value *)> DominatesCallback,
                                 const BlockFrequencyInfo &BFI) {
+  auto GetBlockProfileCount = [&](BasicBlock *BB) {
+    auto Count = BFI.getBlockProfileCount(BB);
+    return Count.has_value() ? *Count : 0;
+  };
   for (auto *U : V->users()) {
     if (auto *BI = dyn_cast<BranchInst>(U)) {
       auto *Cond = BI->getCondition();
       assert(Cond == V);
-      // TODO get branch weights
-      BranchHint BVTrue = {
-          BranchHint::EQ, true, ConstantInt::get(Cond->getType(), 1),
-          BFI.getBlockFreq(BI->getSuccessor(0)).getFrequency()};
-      BranchHint BVFalse = {
-          BranchHint::NE, true, ConstantInt::get(Cond->getType(), 1),
-          BFI.getBlockFreq(BI->getSuccessor(1)).getFrequency()};
-      BranchValues.push_back(BVTrue);
-      BranchValues.push_back(BVFalse);
+      BranchHint BHTrue = {BranchHint::EQ, true,
+                           ConstantInt::get(Cond->getType(), 1),
+                           GetBlockProfileCount(BI->getSuccessor(0)), -1};
+      BranchHint BHFalse = {BranchHint::NE, true,
+                            ConstantInt::get(Cond->getType(), 1),
+                            GetBlockProfileCount(BI->getSuccessor(1)), -1};
+      BranchHints.push_back({BHTrue, BI->getSuccessor(0)});
+      BranchHints.push_back({BHFalse, BI->getSuccessor(1)});
     } else if (auto *Cmp = dyn_cast<CmpInst>(U)) {
       auto *LHS = Cmp->getOperand(0);
       auto *RHS = Cmp->getOperand(1);
@@ -1082,14 +1090,13 @@ static void findAllBranchValues(Value *V, SmallVector<BranchHint> &BranchValues,
       if (DominatesCallback(Other)) {
         for (auto *CmpUser : Cmp->users()) {
           if (auto *BI = dyn_cast<BranchInst>(CmpUser)) {
-            BranchHint BVTrue = {
-                Kind, Signed, Other,
-                BFI.getBlockFreq(BI->getSuccessor(0)).getFrequency()};
-            BranchHint BVFalse = {
-                GetNegated(Kind), Signed, Other,
-                BFI.getBlockFreq(BI->getSuccessor(1)).getFrequency()};
-            BranchValues.push_back(BVTrue);
-            BranchValues.push_back(BVFalse);
+            BranchHint BHTrue = {Kind, Signed, Other,
+                                 GetBlockProfileCount(BI->getSuccessor(0)), -1};
+            BranchHint BHFalse = {GetNegated(Kind), Signed, Other,
+                                  GetBlockProfileCount(BI->getSuccessor(1)),
+                                  -1};
+            BranchHints.push_back({BHTrue, BI->getSuccessor(0)});
+            BranchHints.push_back({BHFalse, BI->getSuccessor(1)});
           }
         }
       }
@@ -1143,40 +1150,52 @@ InputGenInstrumenter::getBranchHints(Value *V, IRBuilderBase &IRB,
     llvm_unreachable(
         "Branch hint called for value other than instruction or argument");
 
-  SmallVector<BranchHint> BranchValues;
+  SmallVector<BranchHintInfo> BranchHints;
 
-  findAllBranchValues(V, BranchValues, DominatesCallback, BFI);
-  std::sort(
-      BranchValues.begin(), BranchValues.end(),
-      [](BranchHint &A, BranchHint &B) { return A.Frequency < B.Frequency; });
+  findAllBranchValues(V, BranchHints, DominatesCallback, BFI);
+  std::sort(BranchHints.begin(), BranchHints.end(),
+            [](BranchHintInfo &A, BranchHintInfo &B) {
+              return A.BH.Frequency < B.BH.Frequency;
+            });
+
+  for (unsigned I = 0; I < BranchHints.size(); I++) {
+    for (unsigned J = 0; J < BranchHints.size(); J++) {
+      if (DT.properlyDominates(BranchHints[I].BB, BranchHints[J].BB) &&
+          (BranchHints[J].BH.Dominator == -1 ||
+           DT.properlyDominates(BranchHints[BranchHints[J].BH.Dominator].BB,
+                                BranchHints[I].BB)))
+        BranchHints[J].BH.Dominator = I;
+    }
+  }
 
   IRBuilder<> IRBEntry(F->getContext());
   IRBEntry.SetInsertPointPastAllocas(IRB.GetInsertPoint()->getFunction());
 
-  Value *Length = IRB.getInt32(BranchValues.size());
+  Value *Length = IRB.getInt32(BranchHints.size());
   Value *Array;
-  if (BranchValues.size() == 0) {
+  if (BranchHints.size() == 0) {
     Array = Constant::getNullValue(IRB.getPtrTy());
   } else {
-    auto *StructTy =
-        StructType::get(F->getContext(), {IRB.getInt32Ty(), IRB.getInt8Ty(),
-                                          IRB.getPtrTy(), IRB.getInt64Ty()});
+    auto *StructTy = StructType::get(
+        F->getContext(), {IRB.getInt32Ty(), IRB.getInt8Ty(), IRB.getPtrTy(),
+                          IRB.getInt64Ty(), IRB.getInt32Ty()});
     Array = IRBEntry.CreateAlloca(StructTy, Length);
-    for (unsigned I = 0; I < BranchValues.size(); I++) {
-      const auto &BV = BranchValues[I];
+    for (unsigned I = 0; I < BranchHints.size(); I++) {
+      const auto &BH = BranchHints[I].BH;
       Value *Struct = UndefValue::get(StructTy);
-      auto *ValAlloca = IRBEntry.CreateAlloca(BV.Val->getType());
-      Value *ToStore = BV.Val;
+      auto *ValAlloca = IRBEntry.CreateAlloca(BH.Val->getType());
+      Value *ToStore = BH.Val;
       if (VMap && isa<Argument>(ToStore)) {
         ToStore = (*VMap)[ToStore];
         assert(ToStore);
       }
       IRB.CreateStore(ToStore, ValAlloca);
       int Idx = 0;
-      Struct = IRB.CreateInsertValue(Struct, IRB.getInt32(BV.Kind), Idx++);
-      Struct = IRB.CreateInsertValue(Struct, IRB.getInt8(BV.Signed), Idx++);
+      Struct = IRB.CreateInsertValue(Struct, IRB.getInt32(BH.Kind), Idx++);
+      Struct = IRB.CreateInsertValue(Struct, IRB.getInt8(BH.Signed), Idx++);
       Struct = IRB.CreateInsertValue(Struct, ValAlloca, Idx++);
-      Struct = IRB.CreateInsertValue(Struct, IRB.getInt64(BV.Frequency), Idx++);
+      Struct = IRB.CreateInsertValue(Struct, IRB.getInt64(BH.Frequency), Idx++);
+      Struct = IRB.CreateInsertValue(Struct, IRB.getInt32(BH.Dominator), Idx++);
       IRB.CreateStore(Struct, IRB.CreateConstGEP1_64(StructTy, Array, I));
     }
   }

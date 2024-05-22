@@ -20,6 +20,7 @@ struct BranchHint {
   bool Signed;
   Value *Val;
   uint64_t Frequency;
+  int32_t Dominator;
 };
 
 } // namespace inputgen

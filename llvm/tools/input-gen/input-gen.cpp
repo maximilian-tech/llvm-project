@@ -140,6 +140,13 @@ static bool writeProgramToFile(int FD, const Module &M) {
 class InputGenOrchestration {
 public:
   Module &M;
+
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+  PassBuilder PB;
+
   std::string Clang;
   InputGenOrchestration(Module &M) : M(M) {};
   void init(int Argc, char **Argv) {
@@ -157,6 +164,12 @@ public:
         fatalError("input-gen: Unable to generate input.");
       }
     }
+
+    PB.registerModuleAnalyses(MAM);
+    PB.registerCGSCCAnalyses(CGAM);
+    PB.registerFunctionAnalyses(FAM);
+    PB.registerLoopAnalyses(LAM);
+    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
   }
 
   std::vector<Function *> Functions;
@@ -170,22 +183,15 @@ public:
     ValueToValueMapTy VMap;
     auto InstrM = CloneModule(M, VMap);
 
-    LoopAnalysisManager LAM;
-    FunctionAnalysisManager FAM;
-    CGSCCAnalysisManager CGAM;
-    ModuleAnalysisManager MAM;
+    preprocessModule(M, Mode);
 
-    PassBuilder PB;
-
-    PB.registerModuleAnalyses(MAM);
-    PB.registerCGSCCAnalyses(CGAM);
-    PB.registerFunctionAnalyses(FAM);
-    PB.registerLoopAnalyses(LAM);
-    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
-    ModuleInputGenInstrumenter MIGI(*InstrM, MAM, Mode, true);
+    bool InstrumentForCoverage = shouldInstrumentForCoverage(Mode);
+    ModuleInputGenInstrumenter MIGI(*InstrM, MAM, Mode, InstrumentForCoverage);
     bool Success = MIGI.instrumentModuleForFunction(
         *InstrM, *cast<Function>(VMap[&EntryPoint]));
+
+    postprocessModule(*InstrM, Mode);
+
     if (!Success) {
       llvm::outs() << "Instrumenting failed\n";
       return;
@@ -217,27 +223,13 @@ public:
       }
     }
   }
-  void genAllFunctionsForRuntime(std::string RuntimeName,
-                                 IGInstrumentationModeTy Mode) {
 
-    ValueToValueMapTy VMap;
-    auto InstrM = CloneModule(M, VMap);
+  bool shouldInstrumentForCoverage(IGInstrumentationModeTy Mode) {
+    return Mode == llvm::IG_Run && ClInstrumentModuleForCoverage;
+  }
 
-    LoopAnalysisManager LAM;
-    FunctionAnalysisManager FAM;
-    CGSCCAnalysisManager CGAM;
-    ModuleAnalysisManager MAM;
-
-    PassBuilder PB;
-
-    PB.registerModuleAnalyses(MAM);
-    PB.registerCGSCCAnalyses(CGAM);
-    PB.registerFunctionAnalyses(FAM);
-    PB.registerLoopAnalyses(LAM);
-    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-
-    bool InstrumentForCoverage =
-        Mode == llvm::IG_Run && ClInstrumentModuleForCoverage;
+  void preprocessModule(Module &M, IGInstrumentationModeTy Mode) {
+    bool InstrumentForCoverage = shouldInstrumentForCoverage(Mode);
 
     if (InstrumentForCoverage || !ClProfilePath.empty()) {
       ModulePassManager MPM;
@@ -245,15 +237,37 @@ public:
         MPM.addPass(PGOInstrumentationGen());
       if (!ClProfilePath.empty())
         MPM.addPass(PGOInstrumentationUse(ClProfilePath));
-      MPM.run(*InstrM, MAM);
+      MPM.run(M, MAM);
     }
 
     if (ClOptimizeBeforeInstrumenting) {
       ModulePassManager MPM =
           PB.buildPerModuleDefaultPipeline(OptimizationLevel::O1);
-      MPM.run(*InstrM, MAM);
+      MPM.run(M, MAM);
     }
+  }
 
+  void postprocessModule(Module &M, IGInstrumentationModeTy Mode) {
+    bool InstrumentForCoverage = shouldInstrumentForCoverage(Mode);
+
+    // Lower profiling intrinsics if we have any so that we can pull PGO data
+    // out.
+    if (InstrumentForCoverage) {
+      ModulePassManager MPM;
+      MPM.addPass(InstrProfilingLoweringPass());
+      MPM.run(M, MAM);
+    }
+  }
+
+  void genAllFunctionsForRuntime(std::string RuntimeName,
+                                 IGInstrumentationModeTy Mode) {
+
+    ValueToValueMapTy VMap;
+    auto InstrM = CloneModule(M, VMap);
+
+    preprocessModule(*InstrM, Mode);
+
+    bool InstrumentForCoverage = shouldInstrumentForCoverage(Mode);
     ModuleInputGenInstrumenter MIGI(*InstrM, MAM, Mode, InstrumentForCoverage);
     bool Success = MIGI.instrumentModule(*InstrM);
     if (!Success) {
@@ -287,13 +301,7 @@ public:
       }
     }
 
-    // Lower profiling intrinsics if we have any so that we can pull PGO data
-    // out.
-    if (InstrumentForCoverage) {
-      ModulePassManager MPM;
-      MPM.addPass(InstrProfilingLoweringPass());
-      MPM.run(*InstrM, MAM);
-    }
+    postprocessModule(*InstrM, Mode);
 
     std::string BcFileName =
         ClOutputDir + "/" + "input-gen.module." + ModeStr + ".bc";

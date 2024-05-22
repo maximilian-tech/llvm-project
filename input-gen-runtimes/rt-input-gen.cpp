@@ -13,7 +13,9 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
+#include <optional>
 #include <random>
 #include <set>
 #include <sys/resource.h>
@@ -25,6 +27,7 @@
 #include "rt.hpp"
 
 #include "../llvm/include/llvm/Transforms/IPO/InputGenerationTypes.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace {
 int VERBOSE = 0;
@@ -35,7 +38,7 @@ using BranchHint = llvm::inputgen::BranchHint;
 static constexpr intptr_t MinObjAllocation = 64;
 static constexpr unsigned NullPtrProbability = 75;
 static constexpr int CmpPtrRetryProbability = 10;
-static constexpr int DefaultMaxGeneratedValue = 10;
+static constexpr int MaxDeviationFromBranchHint = 10;
 
 template <typename T>
 static void dumpBranchHints(BranchHint *BHs, int32_t BHSize) {
@@ -46,6 +49,7 @@ static void dumpBranchHints(BranchHint *BHs, int32_t BHSize) {
     DUMPBF(Kind);
     DUMPBF(Signed);
     DUMPBF(Frequency);
+    DUMPBF(Dominator);
 #undef DUMPBF
     if constexpr (!std::is_same<__int128, T>::value)
       std::cerr << "Val " << *reinterpret_cast<T *>(BH.Val) << std::endl;
@@ -123,7 +127,8 @@ struct ObjectTy {
             OutputEnd - OutputStart, OutputStart};
   }
 
-  template <typename T> T read(VoidPtrTy Ptr, uint32_t Size);
+  template <typename T>
+  T read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize);
 
   template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
     intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
@@ -328,6 +333,8 @@ struct InputGenRTTy {
                           OA.MaxObjectSize, OA.MaxObjectNum));
 
     OutputObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
+    DefaultIntDistrib = std::uniform_int_distribution<>(0, 10);
+    DefaultFloatDistrib = std::uniform_real_distribution<>(0, 10);
   }
   ~InputGenRTTy() {}
 
@@ -344,6 +351,8 @@ struct InputGenRTTy {
   std::filesystem::path ExecPath;
   std::mt19937 Gen;
   std::uniform_int_distribution<> Rand;
+  std::uniform_real_distribution<> DefaultFloatDistrib;
+  std::uniform_int_distribution<> DefaultIntDistrib;
   struct AlignedAllocation {
     VoidPtrTy Memory = nullptr;
     uintptr_t Size = 0;
@@ -468,29 +477,208 @@ struct InputGenRTTy {
   }
 
   template <typename T> T getNewArg(BranchHint *BHs, int32_t BHSize) {
-    T V = getNewValue<T>();
+    T V = getNewValue<T>(BHs, BHSize);
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
     NumArgs++;
-    INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
     return V;
   }
 
   template <typename T> T getNewStub(BranchHint *BHs, int32_t BHSize) {
-    T V = getNewValue<T>();
+    T V = getNewValue<T>(BHs, BHSize);
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
-    INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
     return V;
   }
 
-  template <typename T>
-  T getNewValue() {
+  template <typename T> T getDefaultNewValue() {
+    if constexpr (std::is_floating_point<T>::value) {
+      return DefaultFloatDistrib(Gen);
+    } else if constexpr (std::is_integral<T>::value) {
+      return DefaultIntDistrib(Gen);
+    } else if constexpr (std::is_same<T, __int128>::value) {
+      return DefaultIntDistrib(Gen);
+    } else {
+      static_assert(false);
+    }
+  }
+
+  enum EndKindTy { OPEN, CLOSED };
+  template <typename T> struct Interval {
+    std::optional<T> getExactValue() {
+      if (BeginKind == CLOSED && EndKind == CLOSED && Begin == End)
+        return Begin;
+      return std::nullopt;
+    }
+    EndKindTy BeginKind, EndKind;
+    T Begin, End;
+    static std::optional<Interval<T>> intersect(Interval<T> A, Interval<T> B) {
+      Interval<T> C;
+      if (A.Begin < B.Begin) {
+        C.Begin = B.Begin;
+        C.BeginKind = B.BeginKind;
+      } else if (A.Begin == B.Begin) {
+        C.Begin = B.Begin;
+        C.BeginKind = std::min(A.BeginKind, B.BeginKind);
+      } else {
+        C.Begin = A.Begin;
+        C.BeginKind = A.BeginKind;
+      }
+
+      if (A.End > B.End) {
+        C.End = B.End;
+        C.EndKind = B.EndKind;
+      } else if (A.End == B.End) {
+        C.End = B.End;
+        C.EndKind = std::max(A.EndKind, B.EndKind);
+      } else {
+        C.End = A.End;
+        C.EndKind = A.EndKind;
+      }
+
+      if (C.Begin > C.End)
+        return std::nullopt;
+      if (C.Begin == C.End && std::min(C.BeginKind, C.EndKind) == OPEN)
+        return std::nullopt;
+
+      return C;
+    }
+  };
+
+  template <typename T> struct Set {
+    std::vector<Interval<T>> Intervals;
+    Set(std::vector<Interval<T>> I) : Intervals(I) {}
+    static Set<T> intersect(Set<T> A, Set<T> B) {
+      // Dumbest algorithm ever but it works
+      Set<T> C({});
+      for (size_t I = 0; I < A.Intervals.size(); I++) {
+        for (size_t J = 0; J < B.Intervals.size(); J++) {
+          auto Intersection =
+              Interval<T>::intersect(A.Intervals[I], B.Intervals[I]);
+          if (Intersection.has_value())
+            C.Intervals.push_back(*Intersection);
+        }
+      }
+      return C;
+    }
+    static Set<T> all() {
+      return Set<T>({{CLOSED, CLOSED, std::numeric_limits<T>::min(),
+                      std::numeric_limits<T>::max()}});
+    }
+  };
+
+  // TODO Not sure what happens here when these values are unsigned...
+  // TODO For now we assume every BH is with the same signedness (unsigned or
+  // signed) as it would be very annoying otherwise but we can handle that using
+  // intervals
+  template <typename T> Set<T> getSetForBH(BranchHint BH) {
+    T Val = *reinterpret_cast<T *>(BH.Val);
+    switch (BH.Kind) {
+    default:
+      assert(false && "Invalid branch hint kind found");
+      [[fallthrough]];
+    case BranchHint::EQ:
+      return Set<T>({{CLOSED, CLOSED, Val, Val}});
+    case BranchHint::NE:
+      return Set<T>({{CLOSED, OPEN, std::numeric_limits<T>::min(), Val},
+                     {OPEN, CLOSED, Val, std::numeric_limits<T>::max()}});
+    case BranchHint::LT:
+      return Set<T>({{CLOSED, OPEN, std::numeric_limits<T>::min(), Val}});
+    case BranchHint::LE:
+      return Set<T>({{CLOSED, CLOSED, std::numeric_limits<T>::min(), Val}});
+    case BranchHint::GT:
+      return Set<T>({{OPEN, CLOSED, Val, std::numeric_limits<T>::max()}});
+    case BranchHint::GE:
+      return Set<T>({{CLOSED, CLOSED, Val, std::numeric_limits<T>::max()}});
+    }
+  }
+
+  template <typename T> T getNewValue(BranchHint *BHs, int32_t BHSize) {
+    if constexpr (std::is_same<T, bool>::value) {
+      return getNewValueImpl<char>(BHs, BHSize);
+    } else {
+      return getNewValueImpl<T>(BHs, BHSize);
+    }
+  }
+
+  template <typename T> T getNewValueImpl(BranchHint *BHs, int32_t BHSize) {
     static_assert(!std::is_pointer<T>::value);
     NumNewValues++;
-    T V = rand() % DefaultMaxGeneratedValue;
-    return V;
+    INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
+    if (InputGenConf.EnableBranchHints && BHSize > 0 && BHs[0].Frequency == 0) {
+      BranchHint BH = BHs[0];
+      auto ValueSet = Set<T>::all();
+      do {
+        ValueSet = Set<T>::intersect(ValueSet, getSetForBH<T>(BH));
+        if (BH.Dominator == -1)
+          break;
+        assert(BH.Dominator < BHSize && BH.Dominator >= 0);
+        BH = BHs[BH.Dominator];
+      } while (true);
+
+      if (ValueSet.Intervals.empty()) {
+        INPUTGEN_DEBUG(std::cerr << "Got contradicting combination of Branch "
+                                    "Hints, will just use the first one");
+        ValueSet = getSetForBH<T>(BHs[0]);
+      }
+
+      // Picking an interval at random doesnt seem that uniform but w/e
+      Interval<T> Interval =
+          ValueSet.Intervals[rand() % ValueSet.Intervals.size()];
+      T Begin =
+          Interval.BeginKind == OPEN ? Interval.Begin + 1 : Interval.Begin;
+      T End = Interval.EndKind == OPEN ? Interval.End - 1 : Interval.End;
+
+      // Cap the values so that we dont get something huge
+      if constexpr (std::is_unsigned<T>::value) {
+        if (End - Begin > MaxDeviationFromBranchHint)
+          End = Begin + MaxDeviationFromBranchHint;
+      } else {
+        if (Begin > 0) {
+          if (End - Begin > MaxDeviationFromBranchHint)
+            End = Begin + MaxDeviationFromBranchHint;
+        } else if (End < 0) {
+          if (End - Begin > MaxDeviationFromBranchHint)
+            Begin = End - MaxDeviationFromBranchHint;
+        } else {
+          if (End - Begin > MaxDeviationFromBranchHint) {
+            if (End > MaxDeviationFromBranchHint)
+              End = MaxDeviationFromBranchHint;
+            if (Begin < -MaxDeviationFromBranchHint)
+              Begin = -MaxDeviationFromBranchHint;
+          }
+        }
+      }
+
+      T GenVal;
+
+      if (Interval.getExactValue().has_value())
+        GenVal = *Interval.getExactValue();
+      else if constexpr (std::is_floating_point<T>::value) {
+        auto Distrib = std::uniform_real_distribution<T>(Begin, End);
+        GenVal = Distrib(Gen);
+      } else if constexpr (std::is_integral<T>::value) {
+        auto Distrib = std::uniform_int_distribution<T>(
+            Interval.BeginKind == OPEN ? Begin + 1 : Begin,
+            Interval.EndKind == OPEN ? End - 1 : End);
+        GenVal = Distrib(Gen);
+      } else if constexpr (std::is_same<T, __int128>::value) {
+        auto Distrib = std::uniform_int_distribution<long long>(
+            Interval.BeginKind == OPEN ? Begin + 1 : Begin,
+            Interval.EndKind == OPEN ? End - 1 : End);
+        GenVal = Distrib(Gen);
+      } else {
+        static_assert(false);
+      }
+      if constexpr (!std::is_same<T, __int128>::value)
+        INPUTGEN_DEBUG(std::cerr << "Used branch hints to generate val "
+                                 << GenVal << std::endl);
+      return GenVal;
+    }
+
+    return getDefaultNewValue<T>();
   }
 
-  template <> VoidPtrTy getNewValue<VoidPtrTy>() {
+  template <>
+  VoidPtrTy getNewValue<VoidPtrTy>(BranchHint *BHs, int32_t BHSize) {
     NumNewValues++;
     if (rand() % NullPtrProbability) {
       auto Obj = getNewPtr(0);
@@ -512,9 +700,8 @@ struct InputGenRTTy {
   T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
          int32_t BHSize) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
-    INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
     if (Obj)
-      return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size);
+      return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize);
     return *reinterpret_cast<T *>(Ptr);
   }
 
@@ -654,7 +841,9 @@ struct InputGenRTTy {
 static InputGenRTTy *InputGenRT;
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
-template <typename T> T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size) {
+template <typename T>
+T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
+                 int32_t BHSize) {
   intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
   assert(Output.isAllocated(Offset, Size));
   Used.ensureAllocation(Offset, Size);
@@ -665,7 +854,7 @@ template <typename T> T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size) {
   if (allUsed(Offset, Size))
     return *OutputLoc;
 
-  T Val = getInputGenRT().getNewValue<T>();
+  T Val = getInputGenRT().getNewValue<T>(BHs, BHSize);
   storeGeneratedValue(Val, Offset, Size);
 
   if constexpr (std::is_pointer<T>::value)

@@ -1,11 +1,19 @@
 ; RUN: mkdir -p %t
+; RUN: mkdir -p %t/function-wise/
+;
+; RUN: (input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0 && LLVM_PROFILE_FILE=%t/const_stub.prof VERBOSE=1 %t/input-gen.module.run.a.out %t/input-gen.module.generate.a.out.input.0.0.bin --name const_stub && llvm-profdata merge -o %t/const_stub.prof.merged %t/const_stub.prof && input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile --profile-path %t/const_stub.prof.merged -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0 && LLVM_PROFILE_FILE=%t/const_stub.prof2 VERBOSE=1 %t/input-gen.module.run.a.out %t/input-gen.module.generate.a.out.input.0.0.bin --name const_stub && llvm-profdata merge -o %t/const_stub.prof.merged %t/const_stub.prof %t/const_stub.prof2 && input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile --profile-path %t/const_stub.prof.merged -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0) | FileCheck %s --check-prefix=COVERAGE
+;
+; COVERAGE-DAG: GREATER
+; COVERAGE-DAG: EQUAL
+; COVERAGE-DAG: LESS
+
+
 ; RUN: input-gen -g --verify --output-dir %t --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
 ; RUN: %S/run_all.sh %t
 ;
-; RUN: mkdir -p %t/function-wise/
 ;
 ; RUN: input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function const_load
-; RUN: VERBOSE=1 %t/function-wise/input-gen.function.const_load.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_LOAD
+; RUN: VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/function-wise/input-gen.function.const_load.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_LOAD
 ;
 ; CONST_LOAD: Access: {{.*}} Obj #0
 ; CONST_LOAD-DAG: BranchHint Kind 1 Signed 1 Frequency {{.*}} Val 1024
@@ -15,7 +23,7 @@
 ;
 ;
 ; RUN: input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function const_arg
-; RUN: VERBOSE=1 %t/function-wise/input-gen.function.const_arg.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_ARG
+; RUN: VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/function-wise/input-gen.function.const_arg.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_ARG
 ;
 ; CONST_ARG-DAG: BranchHint Kind 1 Signed 1 Frequency {{.*}} Val 256
 ; CONST_ARG-DAG: BranchHint Kind 2 Signed 1 Frequency {{.*}} Val 256
@@ -24,35 +32,39 @@
 ;
 ;
 ; RUN: input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function const_stub
-; RUN: VERBOSE=1 %t/function-wise/input-gen.function.const_stub.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_STUB
+; RUN: VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/function-wise/input-gen.function.const_stub.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_STUB
 ;
 ; CONST_STUB-DAG: BranchHint Kind 1 Signed 1 Frequency {{.*}} Val 512
 ; CONST_STUB-DAG: BranchHint Kind 2 Signed 1 Frequency {{.*}} Val 512
 ; CONST_STUB-DAG: BranchHint Kind 4 Signed 1 Frequency {{.*}} Val 512
-; CONST_STUB-DAG: BranchHint Kind 5 Signed 1 Frequency {{.*}} Val 512
+; COM: CONST_STUB-DAG: BranchHint Kind 5 Signed 1 Frequency {{.*}} Val 512
+;
+;
 
-; ModuleID = 'branch-hints.c'
-source_filename = "branch-hints.c"
+; ModuleID = 'branch-hints.cpp'
+source_filename = "branch-hints.cpp"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-redhat-linux-gnu"
 
-@str.2 = private unnamed_addr constant [7 x i8] c"LARGER\00", align 1
+@str = private unnamed_addr constant [8 x i8] c"GREATER\00", align 1
+@str.3 = private unnamed_addr constant [6 x i8] c"EQUAL\00", align 1
+@str.4 = private unnamed_addr constant [5 x i8] c"LESS\00", align 1
 
 ; Function Attrs: nofree noinline nounwind uwtable
-define dso_local void @larger() local_unnamed_addr #0 {
-  %1 = tail call i32 @puts(ptr nonnull dereferenceable(1) @str.2)
+define dso_local void @greater() local_unnamed_addr #0 {
+  %1 = tail call i32 @puts(ptr nonnull dereferenceable(1) @str)
   ret void
 }
 
 ; Function Attrs: nofree noinline nounwind uwtable
 define dso_local void @equal() local_unnamed_addr #0 {
-  %1 = tail call i32 @puts(ptr nonnull dereferenceable(1) @str.2)
+  %1 = tail call i32 @puts(ptr nonnull dereferenceable(1) @str.3)
   ret void
 }
 
 ; Function Attrs: nofree noinline nounwind uwtable
 define dso_local void @less() local_unnamed_addr #0 {
-  %1 = tail call i32 @puts(ptr nonnull dereferenceable(1) @str.2)
+  %1 = tail call i32 @puts(ptr nonnull dereferenceable(1) @str.4)
   ret void
 }
 
@@ -62,7 +74,7 @@ define dso_local void @const_arg(i32 noundef %0) local_unnamed_addr #1 {
   br i1 %2, label %3, label %4
 
 3:                                                ; preds = %1
-  tail call void @larger()
+  tail call void @greater()
   br label %8
 
 4:                                                ; preds = %1
@@ -87,7 +99,7 @@ define dso_local void @arg_arg(i32 noundef %0, i32 noundef %1) local_unnamed_add
   br i1 %3, label %4, label %5
 
 4:                                                ; preds = %2
-  tail call void @larger()
+  tail call void @greater()
   br label %9
 
 5:                                                ; preds = %2
@@ -113,7 +125,7 @@ define dso_local void @const_load(ptr nocapture noundef readonly %0) local_unnam
   br i1 %3, label %4, label %5
 
 4:                                                ; preds = %1
-  tail call void @larger()
+  tail call void @greater()
   br label %9
 
 5:                                                ; preds = %1
@@ -139,7 +151,7 @@ define dso_local void @load_arg(ptr nocapture noundef readonly %0, i32 noundef %
   br i1 %4, label %5, label %6
 
 5:                                                ; preds = %2
-  tail call void @larger()
+  tail call void @greater()
   br label %10
 
 6:                                                ; preds = %2
@@ -165,7 +177,7 @@ define dso_local void @const_stub() local_unnamed_addr #2 {
   br i1 %2, label %3, label %4
 
 3:                                                ; preds = %0
-  tail call void @larger()
+  tail call void @greater()
   br label %8
 
 4:                                                ; preds = %0
@@ -194,7 +206,7 @@ define dso_local void @stub_load(ptr nocapture noundef readonly %0) local_unname
   br i1 %4, label %5, label %6
 
 5:                                                ; preds = %1
-  tail call void @larger()
+  tail call void @greater()
   br label %10
 
 6:                                                ; preds = %1
