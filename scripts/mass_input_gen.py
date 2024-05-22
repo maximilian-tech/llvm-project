@@ -85,7 +85,7 @@ def note_down_configuration(args):
     conf = {}
     env = os.environ.copy()
 
-    env_vars_to_note_down = ['INPUT_GEN_PTR_CMP_RETRY']
+    env_vars_to_note_down = ['INPUT_GEN_ENABLE_PTR_CMP_RETRY']
 
     conf['env'] = {}
     for var in env_vars_to_note_down:

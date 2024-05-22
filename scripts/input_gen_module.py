@@ -12,11 +12,9 @@ import json
 from itertools import zip_longest
 
 def add_option_args(parser):
-    parser.add_argument('--input-gen-num', type=int, default=1)
-    parser.add_argument('--input-gen-num-retries', type=int, default=5)
+    parser.add_argument('--input-gen-num', type=int, default=5)
     parser.add_argument('--input-gen-timeout', type=int, default=5)
     parser.add_argument('--input-run-timeout', type=int, default=5)
-    # TODO Pass in an object files here so as not to compile the cpp every time
     parser.add_argument('--input-gen-runtime', default='./input-gen-runtimes/rt-input-gen.cpp')
     parser.add_argument('--input-run-runtime', default='./input-gen-runtimes/rt-run.cpp')
     parser.add_argument('--verbose', action='store_true')
@@ -26,9 +24,10 @@ def add_option_args(parser):
     parser.add_argument('--cleanup', action='store_true')
     parser.add_argument('--coverage-statistics', action='store_true')
     parser.add_argument('--coverage-runtime')
+    parser.add_argument('--branch-hints', action='store_true')
 
 class Function:
-    def __init__(self, name, ident, verbose, coverage_statistics):
+    def __init__(self, name, ident, verbose, generate_profs):
         self.name = name
         self.ident = ident
         self.verbose = verbose
@@ -39,7 +38,7 @@ class Function:
         self.succeeded_seeds = []
         self.inputs = []
         self.times = {}
-        self.coverage_statistics = coverage_statistics
+        self.generate_profs = generate_profs
         self.profile_files = {}
 
     def get_stderr(self):
@@ -65,54 +64,60 @@ class Function:
     def run_input(self, inpt, timeout, available_functions_file_name):
         self.print('Running executables for', self.input_run_executable)
 
-        try:
-            start_time = time.time()
-            igrunargs = [
-                    self.input_run_executable,
-                    inpt,
-                    '--file',
-                    available_functions_file_name,
-                    self.ident,
-                ]
-            if self.coverage_statistics:
-                env = os.environ.copy()
-                profdatafile = os.path.join(self.inputs_dir, inpt + '.profdata')
-                env['LLVM_PROFILE_FILE'] = profdatafile
-            else:
-                env = None
-            proc = subprocess.Popen(
-                igrunargs,
-                stdout=self.get_stdout(),
-                stderr=self.get_stderr(),
-                env=env)
-
-            self.print('ig args run:', ' '.join(igrunargs))
-            out, err = proc.communicate(timeout=timeout)
-
-            end_time = time.time()
-            elapsed_time = end_time - start_time
-
-            if proc.returncode != 0:
-                self.print('Input run process failed (%i): %s' % (proc.returncode, inpt))
-            else:
-                if self.coverage_statistics:
-                    self.profile_files[inpt] = profdatafile
-                if inpt not in self.times:
-                    self.times[inpt] = []
-                self.times[inpt].append(elapsed_time)
-
-        except subprocess.CalledProcessError as e:
-            self.print('Input run process failed: %s' % inpt)
-        except subprocess.TimeoutExpired as e:
-            self.print("Input run timed out! Terminating... %s" % inpt)
-            proc.terminate()
+        succeeded = False
+        if inpt is not None:
             try:
-                proc.communicate(timeout=1)
+                start_time = time.time()
+                igrunargs = [
+                        self.input_run_executable,
+                        inpt,
+                        '--file',
+                        available_functions_file_name,
+                        self.ident,
+                    ]
+                if self.generate_profs:
+                    env = os.environ.copy()
+                    profdatafile = os.path.join(self.inputs_dir, inpt + '.profdata')
+                    env['LLVM_PROFILE_FILE'] = profdatafile
+                else:
+                    env = None
+                proc = subprocess.Popen(
+                    igrunargs,
+                    stdout=self.get_stdout(),
+                    stderr=self.get_stderr(),
+                    env=env)
+
+                self.print('ig args run:', ' '.join(igrunargs))
+                out, err = proc.communicate(timeout=timeout)
+
+                end_time = time.time()
+                elapsed_time = end_time - start_time
+
+                if proc.returncode != 0:
+                    self.print('Input run process failed (%i): %s' % (proc.returncode, inpt))
+                else:
+                    succeeded = True
+
+            except subprocess.CalledProcessError as e:
+                self.print('Input run process failed: %s' % inpt)
             except subprocess.TimeoutExpired as e:
-                self.print("Termination timed out! Killing... %s" % inpt)
-                proc.kill()
-                proc.communicate()
-                self.print("Killed.")
+                self.print("Input run timed out! Terminating... %s" % inpt)
+                proc.terminate()
+                try:
+                    proc.communicate(timeout=1)
+                except subprocess.TimeoutExpired as e:
+                    self.print("Termination timed out! Killing... %s" % inpt)
+                    proc.kill()
+                    proc.communicate()
+                    self.print("Killed.")
+
+        if not succeeded:
+            profdatafile = None
+            elapsed_time = None
+
+        self.times[inpt] = elapsed_time
+        if self.generate_profs:
+            self.profile_files[inpt] = profdatafile
 
 def my_add(a, b):
     if a is None:
@@ -151,6 +156,9 @@ class InputGenModule:
             setattr(self, k, v)
         self.functions = []
 
+        # We do not use a profile for the first run
+        self.use_profile_for_instrumentation = False
+
         if kwargs['coverage_statistics'] and not kwargs['coverage_runtime']:
             self.print_err('Must specify coverage runtime when requesting coverage statistics')
 
@@ -173,14 +181,38 @@ class InputGenModule:
         else:
             return subprocess.DEVNULL
 
-    def generate_inputs(self):
+    def generate_and_run_inputs_impl(self):
+        os.makedirs(self.outdir, exist_ok=True)
 
+        self.instrumentation_failed = self.instrument()
+        self.get_available_functions()
+
+        if self.instrumentation_failed:
+            return
+
+        if self.branch_hints:
+            for i in range(self.input_gen_num):
+                if i != 0:
+                    with tempfile.NamedTemporaryFile() as temp_profdata:
+                        for j in range(i):
+                            for func in self.functions:
+                                prof_file = func.profile_files[func.inputs[j]]
+                                if prof_file is not None:
+                                    self.merge_profdata(temp_profdata.name, prof_file)
+                        self.instrument(temp_profdata.name)
+                self.generate_inputs(1, i != 0)
+                self.run_inputs(i)
+        else:
+            self.generate_inputs(self.input_gen_num)
+            self.run_all_inputs()
+
+    def generate_and_run_inputs(self):
         if self.cleanup:
             self.tempdir = tempfile.TemporaryDirectory(dir=self.outdir)
             self.outdir = self.tempdir.name
 
         try:
-            self.generate_inputs_impl()
+            self.generate_and_run_inputs_impl()
         except Exception as e:
             # Exception here means that something very wrong (killed by oom etc)
             # happened and we should retry
@@ -192,16 +224,11 @@ class InputGenModule:
             assert(self.tempdir is not None)
             self.tempdir.cleanup()
 
-    def generate_inputs_impl(self):
-
-        os.makedirs(self.outdir, exist_ok=True)
-
-        self.print('Generating inputgen executables for', self.input_module, 'in', self.outdir)
-
+    def instrument(self, profdata_filename=None):
         instrumentation_failed = False
         try:
 
-            igargs = [
+            self.ig_instrument_args = [
                 'input-gen',
                 '--input-gen-runtime', self.input_gen_runtime,
                 '--input-run-runtime', self.input_run_runtime,
@@ -210,132 +237,149 @@ class InputGenModule:
                 '--compile-input-gen-executables',
             ]
             if self.g:
-                igargs.append('-g')
-            if self.coverage_statistics:
-                igargs.append('--instrumented-module-for-coverage')
-                igargs.append('--profiling-runtime-path')
-                igargs.append(self.coverage_runtime)
+                self.ig_instrument_args.append('-g')
+            if self.coverage_statistics or profdata_filename:
+                self.ig_instrument_args.append('--instrumented-module-for-coverage')
+                self.ig_instrument_args.append('--profiling-runtime-path')
+                self.ig_instrument_args.append(self.coverage_runtime)
+            if profdata_filename:
+                self.ig_instrument_args.append('--profile-path')
+                self.ig_instrument_args.append(profdata_filename)
 
-            self.print("input-gen args:", " ".join(igargs))
-            subprocess.run(igargs,
+            self.print("input-gen args:", " ".join(self.ig_instrument_args))
+            subprocess.run(self.ig_instrument_args,
                            check=True,
                            stdout=self.get_stdout(),
                            stderr=self.get_stderr())
         except:
             self.print('Failed to instrument')
             instrumentation_failed = True
+        return instrumentation_failed
 
+    # This should always succeed if we run the instrumentation - else it is a
+    # hard failure so we throw
+    def get_available_functions(self):
         self.available_functions_file_name = os.path.join(self.outdir, 'available_functions')
         try:
             available_functions_file = open(self.available_functions_file_name, 'r')
         except IOError as e:
             self.print("Could not open available functions file:", e)
-            self.print("input-gen args:", " ".join(igargs))
+            self.print("input-gen args:", " ".join(self.ig_instrument_args))
             raise e
         else:
             zerosplit = available_functions_file.read().split('\0')
             fids = zerosplit[0:-1:2]
             fnames = zerosplit[1::2]
             for (fid, fname) in zip(fids, fnames, strict=True):
-                func = Function(fname, fid, self.verbose, self.coverage_statistics)
+                func = Function(fname, fid, self.verbose, self.coverage_statistics or self.branch_hints)
                 self.functions.append(func)
+        available_functions_file.close()
 
-                if instrumentation_failed:
-                    continue
+    def generate_inputs(self, input_gen_num, branch_hints=False):
+        for func in self.functions:
+            fname = func.name
+            fid = func.ident
 
-                input_gen_executable = os.path.join(
-                    self.outdir, 'input-gen.module.generate.a.out')
-                input_run_executable = os.path.join(
-                    self.outdir, 'input-gen.module.run.a.out')
-                inputs_dir = os.path.join(self.outdir, 'input-gen.' + fid + '.inputs')
+            input_gen_executable = os.path.join(
+                self.outdir, 'input-gen.module.generate.a.out')
+            input_run_executable = os.path.join(
+                self.outdir, 'input-gen.module.run.a.out')
+            inputs_dir = os.path.join(self.outdir, 'input-gen.' + fid + '.inputs')
 
-                if not os.path.isfile(input_gen_executable):
-                    continue
-                if not os.path.isfile(input_run_executable):
-                    continue
+            if not os.path.isfile(input_gen_executable):
+                continue
+            if not os.path.isfile(input_run_executable):
+                continue
 
-                # Only attach these to the Function if they exist
-                os.makedirs(inputs_dir, exist_ok=True)
-                func.input_run_executable = input_run_executable
-                func.input_gen_executable = input_gen_executable
-                func.inputs_dir = inputs_dir
+            # Only attach these to the Function if they exist
+            os.makedirs(inputs_dir, exist_ok=True)
+            func.input_run_executable = input_run_executable
+            func.input_gen_executable = input_gen_executable
+            func.inputs_dir = inputs_dir
 
-                self.print('Generating inputs for function {} @{}'.format(fid, fname))
+            self.print('Generating inputs for function {} @{}'.format(fid, fname))
 
-                seed = 0
-                for _ in range(self.input_gen_num):
-                    for _ in range(self.input_gen_num_retries):
-                        func.tried_seeds.append(seed)
-                        try:
-                            start = seed
-                            seed += 1
-                            end = start + 1
-                            iggenargs = [
-                                input_gen_executable,
-                                inputs_dir,
-                                str(start), str(end),
-                                '--file',
-                                self.available_functions_file_name,
-                                fid,
-                            ]
-                            self.print('ig args generation:', ' '.join(iggenargs))
-                            proc = subprocess.Popen(
-                                iggenargs,
-                                stdout=self.get_stdout(),
-                                stderr=self.get_stderr())
+            seed = 0 if len(func.tried_seeds) == 0 else func.tried_seeds[-1] + 1
+            for _ in range(input_gen_num):
+                succeeded = False
+                try:
+                    func.tried_seeds.append(seed)
+                    start = seed
+                    seed += 1
+                    end = start + 1
+                    iggenargs = [
+                        input_gen_executable,
+                        inputs_dir,
+                        str(start), str(end),
+                        '--file',
+                        self.available_functions_file_name,
+                        fid,
+                    ]
+                    self.print('ig args generation:', ' '.join(iggenargs))
+                    env = os.environ.copy()
+                    if branch_hints:
+                        env['INPUT_GEN_ENABLE_BRANCH_HINTS'] = '1'
+                    else:
+                        env = os.environ.copy()
+                        if 'INPUT_GEN_ENABLE_BRANCH_HINTS' in env:
+                            del env['INPUT_GEN_ENABLE_BRANCH_HINTS']
+                    proc = subprocess.Popen(
+                        iggenargs,
+                        stdout=self.get_stdout(),
+                        stderr=self.get_stderr(),
+                        env=env)
 
-                            # TODO With the current implementation one of the input
-                            # gens timing out would mean we lose some completed ones.
-                            #
-                            # We should just move the input-gen loop in here and only do
-                            # one output at a time.
-                            out, err = proc.communicate(timeout=self.input_gen_timeout)
+                    # TODO With the current implementation one of the input
+                    # gens timing out would mean we lose some completed ones.
+                    #
+                    # We should just move the input-gen loop in here and only do
+                    # one output at a time.
+                    out, err = proc.communicate(timeout=self.input_gen_timeout)
 
-                            if proc.returncode != 0:
-                                self.print('Input gen process failed: {} @{}'.format(fid, fname))
-                            else:
-                                fins = [os.path.join(inputs_dir,
-                                                    '{}.input.{}.{}.bin'.format(
-                                                        os.path.basename(input_gen_executable), fid, str(i)))
-                                    for i in range(start, end)]
-                                succeeded = True
-                                for inpt in fins:
-                                    # If the input gen process exited
-                                    # successfully these _must_ be here
-                                    if not os.path.isfile(inpt):
-                                        # Something went terribly wrong (for
-                                        # example the function we are generating
-                                        # input for accidentally overwrote our
-                                        # state or did exit(0) or something like
-                                        # that. (Happens in
-                                        # 12374:_ZN25vnl_symmetric_eigensystemIdE5solveERK10vnl_vectorIdEPS2_)
-                                        succeeded = False
-                                        break
-                                if succeeded:
-                                    self.print('Input gen process succeeded: {} @{}'.format(fid, fname))
-                                    # Populate the generated inputs
-                                    func.succeeded_seeds += list(range(start, end))
-                                    func.inputs += fins
-                                    break
+                    if proc.returncode != 0:
+                        self.print('Input gen process failed: {} @{}'.format(fid, fname))
+                    else:
+                        fins = [os.path.join(inputs_dir,
+                                            '{}.input.{}.{}.bin'.format(
+                                                os.path.basename(input_gen_executable), fid, str(i)))
+                            for i in range(start, end)]
+                        succeeded = True
+                        for inpt in fins:
+                            # If the input gen process exited
+                            # successfully these _must_ be here
+                            if not os.path.isfile(inpt):
+                                # Something went terribly wrong (for
+                                # example the function we are generating
+                                # input for accidentally overwrote our
+                                # state or did exit(0) or something like
+                                # that. (Happens in
+                                # 12374:_ZN25vnl_symmetric_eigensystemIdE5solveERK10vnl_vectorIdEPS2_)
+                                succeeded = False
 
-                        except subprocess.CalledProcessError as e:
-                            self.print('Input gen process failed: {} @{}'.format(fid, fname))
-                        except subprocess.TimeoutExpired as e:
-                            self.print('Input gen timed out! Terminating...: {} @{}'.format(fid, fname))
-                            proc.terminate()
-                            try:
-                                proc.communicate(timeout=1)
-                            except subprocess.TimeoutExpired as e:
-                                self.print("Termination timed out! Killing...")
-                                proc.kill()
-                                proc.communicate()
-                                self.print("Killed.")
-            available_functions_file.close()
+                except subprocess.CalledProcessError as e:
+                    self.print('Input gen process failed: {} @{}'.format(fid, fname))
+                except subprocess.TimeoutExpired as e:
+                    self.print('Input gen timed out! Terminating...: {} @{}'.format(fid, fname))
+                    proc.terminate()
+                    try:
+                        proc.communicate(timeout=1)
+                    except subprocess.TimeoutExpired as e:
+                        self.print("Termination timed out! Killing...")
+                        proc.kill()
+                        proc.communicate()
+                        self.print("Killed.")
 
-        if not self.cleanup:
-            available_functions_pickle_file_name = os.path.join(self.outdir, 'available_functions.json')
-            with open(available_functions_pickle_file_name, 'w') as available_functions_pickle_file:
-                available_functions_pickle_file.write(json.dumps(self.functions, default=vars))
+                if succeeded:
+                    self.print('Input gen process succeeded: {} @{}'.format(fid, fname))
+                    # Populate the generated inputs
+                    func.succeeded_seeds += list(range(start, end))
+                    func.inputs += fins
+                else:
+                    func.inputs += [None for _ in range(start, end)]
+
+    def run_inputs(self, idx):
+        for func in self.functions:
+            func.run_input(func.inputs[idx], self.input_run_timeout, self.available_functions_file_name)
 
     def run_all_inputs(self):
         for func in self.functions:
@@ -362,11 +406,25 @@ class InputGenModule:
             self.print(" ".join(merge_args))
 
     def update_statistics(self, stats):
+        for func in self.functions:
+            stats['num_funcs'] += 1
+            if func.input_gen_executable:
+                stats['num_instrumented_funcs'] += 1
+            if len([inpt for inpt in func.inputs if inpt is not None]) != 0:
+                stats['num_input_generated_funcs'] += 1
+            if len([time for time in func.times.values() if time is not None]) != 0:
+                stats['num_input_ran_funcs'] += 1
+
+        if self.instrumentation_failed:
+            return
+
+
         with tempfile.NamedTemporaryFile() as temp_profdata:
             for i in range(self.input_gen_num):
                 for func in self.functions:
-                    if i < len(func.profile_files):
-                        self.merge_profdata(temp_profdata.name, list(func.profile_files.values())[i])
+                    prof_file = func.profile_files[func.inputs[i]]
+                    if prof_file is not None:
+                        self.merge_profdata(temp_profdata.name, prof_file)
 
                 mbb_dict = None
                 try:
@@ -396,15 +454,6 @@ class InputGenModule:
                     stats['num_bbs'] = max(num_bbs, stats['num_bbs']) if stats['num_bbs'] is not None else num_bbs
                     stats['num_bbs_executed'].append(num_bbs_executed)
 
-        for func in self.functions:
-            stats['num_funcs'] += 1
-            if func.input_gen_executable:
-                stats['num_instrumented_funcs'] += 1
-            if len(func.inputs) != 0:
-                stats['num_input_generated_funcs'] += 1
-            if len(func.times) != 0:
-                stats['num_input_ran_funcs'] += 1
-
 def handle_single_module(task, args):
     (i, module) = task
 
@@ -418,10 +467,13 @@ def handle_single_module(task, args):
     igm_args['input_module'] = module_file.name
 
     igm = InputGenModule(**igm_args)
-    igm.generate_inputs()
-    igm.run_all_inputs()
+    igm.generate_and_run_inputs()
 
-    statistics = igm.get_statistics()
+    try:
+        statistics = igm.get_statistics()
+    except Exception as e:
+        print(i)
+        raise e
 
     igm.cleanup_outdir()
     if args.cleanup:
@@ -434,18 +486,5 @@ def handle_single_module(task, args):
     return statistics
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('InputGenModule')
-
-    parser.add_argument('--outdir', required=True)
-    parser.add_argument('--input-module', required=True)
-
-    add_option_args(parser)
-
-    args = parser.parse_args()
-
-    IGM = InputGenModule(**vars(args))
-    IGM.generate_inputs()
-    IGM.run_all_inputs()
-    IGM.cleanup_outdir()
-
-    print(IGM.get_statistics())
+    print("Unsupported currently, look at the above function and restore if needed")
+    sys.exit(1)

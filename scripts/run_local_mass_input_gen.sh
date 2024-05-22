@@ -2,7 +2,19 @@
 
 set -e
 
-module load python/3.10.8
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+### Default values. These can be overridden in the user config file below
+DATASET="/p/vast1/LExperts/ComPile-Public-V2"
+OUTDIR="/l/ssd/$USER/compile-input-gen-out/"
+LLVM_INSTALL_DIR="/usr/WS1/$USER/opt/input-gen-release"
+### Default values
+
+# User provided configuration
+USER_CONFIG="$SCRIPT_DIR/configuration.sh"
+if [ -f "$USER_CONFIG" ]; then
+    . "$USER_CONFIG"
+fi
 
 if [ "$SINGLE" != "" ]; then
     START="$SINGLE"
@@ -12,8 +24,6 @@ fi
 START=${START:=0}
 END=${END:=7000}
 NUM_CPU=${NUM_CPU:="$(nproc --all)"}
-
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 SCRIPT="$SCRIPT_DIR/mass_input_gen.py"
 
@@ -39,16 +49,8 @@ if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 
-### Default values. These can be overridden in the user config file below
-DATASET="/p/vast1/LExperts/ComPile-Public-V2"
-OUTDIR="/l/ssd/$USER/compile-input-gen-out/"
-LLVM_INSTALL_DIR="/usr/WS1/$USER/opt/input-gen-release"
-### Default values
-
-# User provided configuration
-USER_CONFIG="$SCRIPT_DIR/configuration.sh"
-if [ -f "$USER_CONFIG" ]; then
-    . "$USER_CONFIG"
+if ! [ -z ${INPUT_GEN_ENABLE_BRANCH_HINTS+x} ]; then
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --branch-hints"
 fi
 
 . "$SCRIPT_DIR/enable.sh" "$LLVM_INSTALL_DIR"
@@ -64,7 +66,6 @@ function run() {
         --input-gen-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-input-gen.cpp")" \
         --input-run-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-run.cpp")" \
         --input-gen-num 5 \
-        --input-gen-num-retries 5 \
         --input-gen-timeout 5 \
         --input-run-timeout 5 \
         --num-procs="$NUM_CPU" \
