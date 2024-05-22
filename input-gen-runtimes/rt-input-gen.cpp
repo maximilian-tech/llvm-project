@@ -34,6 +34,11 @@ namespace {
 int VERBOSE = 0;
 }
 
+extern "C" {
+extern VoidPtrTy __inputgen_function_pointers[];
+extern uint32_t __inputgen_num_function_pointers;
+}
+
 using BranchHint = llvm::inputgen::BranchHint;
 
 static constexpr intptr_t MinObjAllocation = 64;
@@ -139,7 +144,8 @@ struct ObjectTy {
     OutputLimits.update(Offset, Size);
   }
 
-  void setFunctionPtrIdx(VoidPtrTy Ptr, uint32_t Size, VoidPtrTy FPtr, uint32_t FIdx) {
+  void setFunctionPtrIdx(VoidPtrTy Ptr, uint32_t Size, VoidPtrTy FPtr,
+                         uint32_t FIdx) {
     intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
     storeGeneratedValue(FPtr, Offset, Size);
     FPtrs.insert({Offset, FIdx});
@@ -710,7 +716,7 @@ struct InputGenRTTy {
     return nullptr;
   }
 
-  template <> FunctionPtrTy *getNewValue<FunctionPtrTy *>(BranchHint *BHs, int32_t BHSize) {
+  template <> FunctionPtrTy getNewValue<FunctionPtrTy>(BranchHint *BHs, int32_t BHSize) {
     NumNewValues++;
     return nullptr;
   }
@@ -739,10 +745,22 @@ struct InputGenRTTy {
                           (void *)Global, Obj.Idx, (void *)ReplGlobal));
   }
 
-  void registerFunctionPtrAccess(VoidPtrTy Ptr, uint32_t Size, VoidPtrTy FPtr, uint32_t GlobalFPIdx) {
+  void registerFunctionPtrAccess(VoidPtrTy Ptr, uint32_t Size,
+                                 VoidPtrTy *PotentialFPs, uint64_t N) {
     ObjectTy *Obj = globalPtrToObj(Ptr);
     assert(Obj && "FP Object should just have been created.");
-    Obj->setFunctionPtrIdx( OA.globalPtrToLocalPtr(Ptr), Size, FPtr, GlobalFPIdx);
+    VoidPtrTy FP = PotentialFPs[rand() % N];
+    *reinterpret_cast<VoidPtrTy *>(Ptr) = FP;
+
+    VoidPtrTy *GlobalIt = std::find(
+        __inputgen_function_pointers,
+        __inputgen_function_pointers + __inputgen_num_function_pointers, FP);
+    assert(GlobalIt != __inputgen_function_pointers +
+                           __inputgen_num_function_pointers &&
+           "Function not found in list!");
+
+    Obj->setFunctionPtrIdx(OA.globalPtrToLocalPtr(Ptr), Size, FP,
+                           GlobalIt - __inputgen_function_pointers);
   }
 
   intptr_t registerFunctionPtrIdx(size_t N) {
@@ -907,7 +925,7 @@ T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
   if (allUsed(Offset, Size))
     return *OutputLoc;
 
-  if constexpr (std::is_same<T, FunctionPtrTy*>::value)
+  if constexpr (std::is_same<T, FunctionPtrTy>::value)
     return nullptr;
 
   T Val = getInputGenRT().getNewValue<T>(BHs, BHSize);
@@ -920,9 +938,6 @@ T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
 }
 
 extern "C" {
-extern VoidPtrTy __inputgen_function_pointers[];
-extern uint32_t __inputgen_num_function_pointers;
-
 void __inputgen_version_mismatch_check_v1() {}
 
 void __inputgen_init() {
@@ -943,17 +958,8 @@ VoidPtrTy __inputgen_select_fp(VoidPtrTy *PotentialFPs, uint64_t N) {
 
 void __inputgen_access_fp(VoidPtrTy Ptr, int32_t Size, VoidPtrTy Base,
                           VoidPtrTy *PotentialFPs, uint64_t N) {
-  if (!getInputGenRT().read<FunctionPtrTy *>(Ptr, Base, Size, /* BHs */ nullptr, 0)) {
-    VoidPtrTy FP = PotentialFPs[rand() % N];
-    *reinterpret_cast<VoidPtrTy *>(Ptr) = FP;
-    VoidPtrTy *GlobalIt = std::find(
-        __inputgen_function_pointers,
-        __inputgen_function_pointers + __inputgen_num_function_pointers, FP);
-    assert(GlobalIt != __inputgen_function_pointers +
-                           __inputgen_num_function_pointers &&
-           "Function not found in list!");
-    getInputGenRT().registerFunctionPtrAccess(
-        Ptr, Size, FP, GlobalIt - __inputgen_function_pointers);
+  if (!getInputGenRT().read<FunctionPtrTy>(Ptr, Base, Size, /* BHs */ nullptr, 0)) {
+    getInputGenRT().registerFunctionPtrAccess(Ptr, Size, PotentialFPs, N);
     return;
   }
   // return an error if the function ptr is not in the potential callee list.
