@@ -131,7 +131,7 @@ public:
                                      Value *ValueToReplace,
                                      ValueToValueMapTy *VMap);
   Value *constructFpFromPotentialCallees(const CallBase &Caller, Value &V,
-                                         IRBuilderBase &IRB);
+                                         IRBuilderBase &IRB, SetVector<Instruction*>& ToDelete);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F, bool UniqName);
   void createRunEntryPoint(Function &F, bool UniqName);
