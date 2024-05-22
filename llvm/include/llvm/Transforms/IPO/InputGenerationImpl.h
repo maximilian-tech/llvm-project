@@ -82,7 +82,8 @@ public:
                        IGInstrumentationModeTy Mode,
                        bool InstrumentedForCoverage)
       : Mode(Mode), MAM(MAM), M(M),
-        InstrumentedForCoverage(InstrumentedForCoverage) {
+        InstrumentedForCoverage(InstrumentedForCoverage),
+        StubNameCounter(0) {
     Ctx = &(M.getContext());
     PtrTy = PointerType::getUnqual(*Ctx);
     Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
@@ -129,13 +130,14 @@ public:
                                      CallbackCollectionTy &CC, Type *T,
                                      Value *ValueToReplace,
                                      ValueToValueMapTy *VMap);
-  Value *constructFpFromPotentialCallees(const CallBase &Caller, Value& V, IRBuilderBase& IRB);
+  Value *constructFpFromPotentialCallees(const CallBase &Caller, Value &V,
+                                         IRBuilderBase &IRB);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F, bool UniqName);
   void createRunEntryPoint(Function &F, bool UniqName);
   void createGlobalCalls(Module &M, IRBuilder<> &IRB);
   void stubDeclaration(Module &M, Function &F);
-  Function& stubDeclaration(Module &M, FunctionType& FT, StringRef Suffix);
+  Function &stubDeclaration(Module &M, FunctionType &FT, StringRef Suffix);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
   void gatherFunctionPtrCallees(Module &M);
   void instrumentFunctionPtrSources(Module &M);
@@ -175,6 +177,7 @@ private:
   FunctionCallee UnreachableCallback;
 
   bool InstrumentedForCoverage;
+  int StubNameCounter;
 };
 
 class ModuleInputGenInstrumenter {
