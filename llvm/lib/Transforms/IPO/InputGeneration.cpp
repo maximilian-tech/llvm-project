@@ -812,6 +812,7 @@ Function &InputGenInstrumenter::stubDeclaration(Module &M, FunctionType &FT,
 
 void InputGenInstrumenter::stubDeclaration(Module &M, Function &F) {
   F.setLinkage(GlobalValue::WeakAnyLinkage);
+  F.setMetadata(LLVMContext::MD_dbg, nullptr);
 
   auto *EntryBB = BasicBlock::Create(*Ctx, "entry", &F);
 
@@ -988,7 +989,6 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
 
 void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
   SetVector<Function *> Functions;
-  SetVector<const CallBase *> IndirectCIs;
 
   FunctionAnalysisManager &FAM =
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
@@ -1007,13 +1007,12 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
   AC.UseLiveness = false;
   AC.DefaultInitializeLiveInternals = false;
   AC.IsClosedWorldModule = true;
-  AC.InitializationCallback = [&IndirectCIs](Attributor &A, const Function &F) {
+  AC.InitializationCallback = [](Attributor &A, const Function &F) {
     for (auto &I : instructions(F)) {
       if (auto *CB = dyn_cast<CallBase>(&I)) {
         if (CB->isIndirectCall()) {
           A.getOrCreateAAFor<AAPotentialValues>(
               IRPosition::value(*CB->getCalledOperand(), CB));
-          IndirectCIs.insert(CB);
           LLVM_DEBUG(dbgs() << "CB: " << *CB << " in "
                             << CB->getCaller()->getName() << '\n');
         }
@@ -1032,6 +1031,11 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
     AC.InitializationCallback(A, F);
   A.run();
 
+  SetVector<const CallBase *> IndirectCIs;
+  for (auto &F : M)
+    for (auto &I : instructions(F))
+      if (auto *CI = dyn_cast<CallBase>(&I); CI && CI->isIndirectCall())
+        IndirectCIs.insert(CI);
   for (auto *Call : IndirectCIs) {
     auto *F = Call->getFunction();
     LLVM_DEBUG(dbgs() << *Call << " in function " << F->getName() << "\n");
@@ -1535,7 +1539,7 @@ Value *InputGenInstrumenter::constructFpFromPotentialCallees(
       auto *Callee = cast<Function>(CalleeAsVMD);
 
       CalleeSet.insert(Callee);
-      outs() << Callee->getName() << '\n';
+      LLVM_DEBUG(dbgs() << Callee->getName() << '\n');
     }
   }
 
