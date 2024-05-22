@@ -891,10 +891,12 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
   for (Function &F : M)
     Functions.insert(&F);
 
+  DenseSet<const char *> Allowed({&AAIndirectCallInfo::ID});
+
   AttributorConfig AC(CGUpdater);
   AC.IsModulePass = true;
   AC.DeleteFns = false;
-  AC.Allowed = nullptr;
+  AC.Allowed = &Allowed;
   AC.UseLiveness = false;
   AC.DefaultInitializeLiveInternals = false;
   AC.IsClosedWorldModule = true;
@@ -1006,10 +1008,32 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
   for (Function &F : M)
     Functions.insert(&F);
 
+  DenseSet<const char *> Allowed({
+      &AAPotentialValues::ID,
+      &AACallEdges::ID,
+      &AAGlobalValueInfo::ID,
+      &AAIndirectCallInfo::ID,
+      &AAInstanceInfo::ID,
+      &AAInterFnReachability::ID,
+      &AAIntraFnReachability::ID,
+      // &AAIsDead::ID, // this kills insts that are still referred to by the getAssumedSimplifiedValues lookup..
+      &AAMemoryBehavior::ID,
+      &AAMemoryLocation::ID,
+      &AANoCapture::ID,
+      &AANonNull::ID,
+      &AANoRecurse::ID,
+      &AANoReturn::ID,
+      &AANoSync::ID,
+      &AAPointerInfo::ID,
+      &AAPotentialConstantValues::ID,
+      &AAUnderlyingObjects::ID,
+      &AAValueConstantRange::ID,
+  });
+
   AttributorConfig AC(CGUpdater);
   AC.IsModulePass = true;
   AC.DeleteFns = false;
-  AC.Allowed = nullptr;
+  AC.Allowed = &Allowed;
   AC.UseLiveness = false;
   AC.DefaultInitializeLiveInternals = false;
   AC.IsClosedWorldModule = true;
