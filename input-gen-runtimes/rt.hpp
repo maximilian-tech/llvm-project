@@ -24,7 +24,8 @@ static constexpr intptr_t ObjAlignment = 16;
 static constexpr intptr_t MaxPrimitiveTypeSize = 16;
 
 typedef uint8_t *VoidPtrTy;
-struct FunctionPtrTy{};
+typedef struct {}* FunctionPtrTy;
+
 
 template <typename T> static char *ccast(T *Ptr) {
   return reinterpret_cast<char *>(Ptr);
