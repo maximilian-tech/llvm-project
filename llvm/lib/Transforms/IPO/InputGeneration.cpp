@@ -1016,7 +1016,8 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
       &AAInstanceInfo::ID,
       &AAInterFnReachability::ID,
       &AAIntraFnReachability::ID,
-      // &AAIsDead::ID, // this kills insts that are still referred to by the getAssumedSimplifiedValues lookup..
+      // &AAIsDead::ID, // this kills insts that are still referred to by the
+      // getAssumedSimplifiedValues lookup..
       &AAMemoryBehavior::ID,
       &AAMemoryLocation::ID,
       &AANoCapture::ID,
@@ -1062,6 +1063,8 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
   A.run();
 
   SetVector<const CallBase *> IndirectCIs;
+  ValueToValueMapTy VMap;
+  SetVector<Instruction *> ToDelete;
   for (auto &F : M)
     for (auto &I : instructions(F))
       if (auto *CI = dyn_cast<CallBase>(&I); CI && CI->isIndirectCall())
@@ -1072,15 +1075,20 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
 
     SmallVector<AA::ValueAndContext> Values;
     bool UsedAssumedInformation = false;
+
     if (A.getAssumedSimplifiedValues(
             IRPosition::value(*Call->getCalledOperand(), Call), nullptr, Values,
             AA::ValueScope::AnyScope, UsedAssumedInformation)) {
       for (auto &VAC : Values) {
         auto *V = VAC.getValue();
-        LLVM_DEBUG(dbgs() << "Value " << *V);
-        if (VAC.getCtxI())
-          LLVM_DEBUG(dbgs() << " and inst " << *VAC.getCtxI() << '\n');
-        if (isa<Function>(V))
+        LLVM_DEBUG(dbgs() << "Value ";
+                   if (isa<Function>(V)) dbgs() << V->getName();
+                   else dbgs() << *V;
+                   if (VAC.getCtxI()) dbgs() << " and inst " << *VAC.getCtxI();
+                   dbgs() << '\n');
+
+        if (isa<Function>(V) || isa<UndefValue>(V) ||
+            isa<ConstantPointerNull>(V) || VMap.lookup(V))
           continue;
 
         // don't need to rewrite arguments here, as we already have them handled
@@ -1095,14 +1103,19 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
         }();
         assert(IP && "must have a valid IP!");
         IRBuilder<> IRB(IP);
-        if (auto *NewV = constructFpFromPotentialCallees(*Call, *V, IRB)) {
+        if (auto *NewV =
+                constructFpFromPotentialCallees(*Call, *V, IRB, ToDelete)) {
           V->replaceAllUsesWith(NewV);
           if (auto *VI = dyn_cast<Instruction>(V))
-            VI->eraseFromParent();
+            ToDelete.insert(VI);
         }
       }
     }
   }
+
+  for (auto *VI : ToDelete)
+    VI->eraseFromParent();
+
   // insert global list of all functions to be used for identifying FPs in
   // objects.
   SmallVector<Constant *> FuncVec;
@@ -1549,7 +1562,8 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
 }
 
 Value *InputGenInstrumenter::constructFpFromPotentialCallees(
-    const CallBase &Caller, Value &V, IRBuilderBase &IRB) {
+    const CallBase &Caller, Value &V, IRBuilderBase &IRB,
+    SetVector<Instruction *> &ToDelete) {
   struct Incrementer {
     int &Counter;
     Incrementer(int &Init) : Counter(Init) {}
@@ -1610,13 +1624,13 @@ Value *InputGenInstrumenter::constructFpFromPotentialCallees(
         LI->replaceUsesOfWith(GEP, UndefValue::get(GEP->getType()));
     } else {
       if (Mode == IG_Generate) {
-        auto *MemAccessCal = LI->getPrevNonDebugInstruction();
-        assert(MemAccessCal && "Load should be instrumented");
-        assert(cast<CallBase>(MemAccessCal)
-                   ->getCalledFunction()
-                   ->getName()
-                   .starts_with("__inputgen_access"));
-        MemAccessCal->eraseFromParent();
+        if (auto *MemAccessI = LI->getPrevNonDebugInstruction())
+          if (auto *MemAccessCal = dyn_cast<CallBase>(MemAccessI);
+              MemAccessCal &&
+              MemAccessCal->getCalledFunction()->getName().starts_with(
+                  "__inputgen_access"))
+            ToDelete.insert(MemAccessCal);
+
         // void __inputgen_access_fp(VoidPtrTy Ptr, int32_t Size,
         //  VoidPtrTy Base, VoidPtrTy *PotentialFPs,
         //  uint64_t N)
@@ -1774,11 +1788,12 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
 
   SetVector<uint64_t> FPArgs;
   gatherCallbackArguments(F, FPArgs);
+  SetVector<Instruction *> ToDelete;
   auto GetFPArg = [&](auto &Arg) {
     for (auto *U : Arg.users()) {
       if (auto *CI = dyn_cast<CallBase>(U);
           CI && CI->getCalledOperand() == &Arg) {
-        return constructFpFromPotentialCallees(*CI, Arg, IRB);
+        return constructFpFromPotentialCallees(*CI, Arg, IRB, ToDelete);
       }
     }
     llvm_unreachable("Arg must be used when used as callback.");
@@ -1793,6 +1808,10 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
       Args.push_back(HandleType(Arg.getType(), &Arg));
     }
   }
+
+  for (auto *I : ToDelete)
+    I->eraseFromParent();
+
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
   if (Ret->getType()->isVoidTy())
     return;
