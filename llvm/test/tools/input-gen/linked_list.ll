@@ -2,10 +2,9 @@
 ; RUN: input-gen -g --verify --output-dir %t --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
 ; RUN: %S/run_all.sh %t
 ;
-; RUN: mkdir -p %t/function-wise/
-; RUN: input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function foo
-; RUN: %t/function-wise/input-gen.function.foo.generate.a.out %t/function-wise/ 2 3
-; RUN: %t/function-wise/input-gen.function.foo.run.a.out %t/function-wise/input-gen.function.foo.generate.a.out.input.2.bin
+; RUN: input-gen -g --verify --output-dir %t --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
+; RUN: INPUT_GEN_ENABLE_PTR_CMP_RETRY=1 %S/run_all.sh %t
+;
 
 source_filename = "linked_list.c"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"

@@ -391,8 +391,17 @@ struct InputGenRTTy {
   };
   NewObj getNewPtr(uint64_t Size) {
     size_t Idx = Objects.size();
+    size_t NullPtrIdx = -1;
     for (auto &ObjCmp : ObjCmps) {
-      if (ObjCmp.IdxOther == Idx && !ObjCmp.Done) {
+      if (ObjCmp.Done)
+        continue;
+      if (ObjCmp.IdxOriginal == Idx && ObjCmp.IdxOther == NullPtrIdx) {
+        INPUTGEN_DEBUG(
+            fprintf(stderr, "Generated null pointer for comparison\n"));
+        ObjCmp.Done = true;
+        return {NullPtrIdx, nullptr};
+      }
+      if (ObjCmp.IdxOther == Idx) {
         // An offset of this object will be compared to ObjCmp.IdxOriginal at
         // offset ObjCmp.Offset. Make sure that comparison will succeed
         VoidPtrTy Ptr =
@@ -414,7 +423,10 @@ struct InputGenRTTy {
     return {Idx, OutputPtr};
   }
 
-  size_t getObjIdx(VoidPtrTy GlobalPtr) {
+  size_t getObjIdx(VoidPtrTy GlobalPtr, bool AllowNull = false) {
+    assert(AllowNull || GlobalPtr);
+    if (GlobalPtr == nullptr)
+      return -1;
     size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
     return Idx;
   }
@@ -441,19 +453,17 @@ struct InputGenRTTy {
     if (!InputGenConf.EnablePtrCmpRetry)
       return;
 
-    // Ignore null pointers for now
-    if (A == nullptr || B == nullptr)
-      return;
-
-    // Do not move this into the if. We want to consume a rand() even when this
-    // is disabled
+    // Do not move this down. We want to always consume a rand() here
     bool ShouldCallback = !(rand() % CmpPtrRetryProbability);
+
+    if (A == nullptr && B == nullptr)
+      return;
 
     if (!ObjCmpCallback)
       return;
 
-    size_t IdxA = getObjIdx(A);
-    size_t IdxB = getObjIdx(B);
+    size_t IdxA = getObjIdx(A, /*AllowNull=*/true);
+    size_t IdxB = getObjIdx(B, /*AllowNull=*/true);
     INPUTGEN_DEBUG(std::cerr << "CmpPtr " << (void *)A << " (#" << IdxA << ") "
                              << (void *)B << " (#" << IdxB << ") "
                              << std::endl);
@@ -469,6 +479,7 @@ struct InputGenRTTy {
       INPUTGEN_DEBUG(std::cerr
                      << "Compared different objects, will retry input gen. "
                      << IdxA << " " << IdxB << std::endl);
+
       ObjCmpInfoTy ObjCmp = {
           IdxA, IdxB, OA.globalPtrToLocalPtr(A) - OA.globalPtrToLocalPtr(B),
           false};
@@ -680,7 +691,8 @@ struct InputGenRTTy {
   template <>
   VoidPtrTy getNewValue<VoidPtrTy>(BranchHint *BHs, int32_t BHSize) {
     NumNewValues++;
-    if (rand() % NullPtrProbability) {
+    // We let the ptr cmp retry handle null pointers if it is enabled
+    if (InputGenConf.EnablePtrCmpRetry || (rand() % NullPtrProbability)) {
       auto Obj = getNewPtr(0);
       INPUTGEN_DEBUG(printf("New ptr: Obj #%lu at output ptr %p\n", Obj.Idx,
                             (void *)Obj.Ptr));
