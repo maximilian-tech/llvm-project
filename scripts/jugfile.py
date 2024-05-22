@@ -16,9 +16,19 @@ import input_gen_module as igm
 def handle_single_module_i(i):
     ds_i = ds.skip(i)
     row = list(ds_i.take(1))[0]
+
     module = row['content']
     language = row['language']
-    return {'idx': i, 'language': language, 'stats': igm.handle_single_module((i, module), args)}
+
+    try:
+        stats = igm.handle_single_module((i, module), args)
+        retry = False
+    except Exception as e:
+        print('Retry', i)
+        stats = igm.get_empty_statistics()
+        retry = True
+
+    return {'idx': i, 'language': language, 'stats': stats, 'retry': retry}
 
 def note_down_configuration():
     return mig.note_down_configuration(args)
