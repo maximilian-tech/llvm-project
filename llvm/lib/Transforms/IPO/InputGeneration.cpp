@@ -804,6 +804,12 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
 
 Function &InputGenInstrumenter::stubDeclaration(Module &M, FunctionType &FT,
                                                 StringRef Suffix) {
+  auto IsEquivalentStub = [&](Function &F) {
+    return F.getFunctionType() == &FT &&
+           F.getName().starts_with("__inputgen_fpstub_");
+  };
+  if (auto It = find_if(M, IsEquivalentStub); It != M.end())
+    return *It;
   auto *F = Function::Create(&FT, GlobalValue::WeakAnyLinkage,
                              "__inputgen_fpstub_" + Suffix, M);
   stubDeclaration(M, *F);
@@ -1520,10 +1526,11 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
 
 Value *InputGenInstrumenter::constructFpFromPotentialCallees(
     const CallBase &Caller, Value &V, IRBuilderBase &IRB) {
-  static int Counter = 0;
   struct Incrementer {
+    int &Counter;
+    Incrementer(int &Init) : Counter(Init) {}
     ~Incrementer() { Counter++; }
-  } Incr;
+  } Incr(StubNameCounter);
 
   LLVM_DEBUG(dbgs() << V << " for "
                     << IRB.GetInsertBlock()->getParent()->getName() << '\n');
@@ -1531,8 +1538,8 @@ Value *InputGenInstrumenter::constructFpFromPotentialCallees(
   SetVector<Constant *> CalleeSet;
 
   // Todo: add this to callee md, as callee md should be the complete set!
-  CalleeSet.insert(
-      &stubDeclaration(M, *Caller.getFunctionType(), std::to_string(Counter)));
+  CalleeSet.insert(&stubDeclaration(M, *Caller.getFunctionType(),
+                                    std::to_string(StubNameCounter)));
   if (auto *CalleesMD = Caller.getMetadata(LLVMContext::MD_callees)) {
     for (auto &CalleeMD : CalleesMD->operands()) {
       auto *CalleeAsVMD = cast<ValueAsMetadata>(CalleeMD)->getValue();
@@ -1552,10 +1559,21 @@ Value *InputGenInstrumenter::constructFpFromPotentialCallees(
       ArrayType::get(PointerType::getUnqual(V.getContext()), Callees.size());
   auto *CalleeArr = ConstantArray::get(ArrTy, Callees);
 
-  auto *CalleeGV =
-      new GlobalVariable(ArrTy, true, GlobalValue::WeakAnyLinkage, CalleeArr,
-                         "__inputgen_fp_map_" + std::to_string(Counter));
-  M.insertGlobalVariable(CalleeGV);
+  auto *CalleeGV = [&]() {
+    auto IsEquivalentGV = [&](GlobalVariable &GV) {
+      return GV.isConstant() &&
+             GV.getName().starts_with("__inputgen_fp_map_") &&
+             GV.getInitializer() == CalleeArr;
+    };
+    if (auto It = find_if(M.globals(), IsEquivalentGV); It != M.global_end()) {
+      return &*It;
+    }
+    auto *CalleeGV = new GlobalVariable(
+        ArrTy, true, GlobalValue::WeakAnyLinkage, CalleeArr,
+        "__inputgen_fp_map_" + std::to_string(StubNameCounter));
+    M.insertGlobalVariable(CalleeGV);
+    return CalleeGV;
+  }();
 
   auto *FPTy = PointerType::getUnqual(V.getContext());
 
