@@ -25,6 +25,7 @@ def add_option_args(parser):
     parser.add_argument('--coverage-statistics', action='store_true')
     parser.add_argument('--coverage-runtime')
     parser.add_argument('--branch-hints', action='store_true')
+    parser.add_argument('--disable-fp-handling', action='store_true')
 
 class Function:
     def __init__(self, name, ident, verbose, generate_profs):
@@ -245,6 +246,8 @@ class InputGenModule:
             if profdata_filename:
                 self.ig_instrument_args.append('--profile-path')
                 self.ig_instrument_args.append(profdata_filename)
+            if self.disable_fp_handling:
+                self.ig_instrument_args.append("--input-gen-instrument-function-ptrs=false")
 
             self.print("input-gen args:", " ".join(self.ig_instrument_args))
             subprocess.run(self.ig_instrument_args,
