@@ -1702,10 +1702,10 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
 
   SmallVector<Value *> Args;
   ValueToValueMapTy VMap;
-  for (uint64_t A = 0; A < F.arg_size(); ++A) {
-    auto &Arg = *F.getArg(A);
+  for (auto &Arg : F.args()) {
     Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
                                                Arg.getType(), &Arg, &VMap));
+    VMap[&Arg] = Args.back();
   }
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
   if (Ret->getType()->isVoidTy())
