@@ -828,19 +828,23 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
     if (RTy->isVoidTy())
       continue;
 
-    SmallVector<CallBase *> ToStub;
+    // To generate branch hints we need to generate the value at the call site
+    // scope.
+    // TODO We can make this work for Invoke too but it is slightly more
+    // annoying
+    SmallVector<CallInst *> ToStub;
     for (auto *User : F.users())
-      if (auto *CB = dyn_cast<CallBase>(User))
-        if (CB->getCalledFunction() == &F)
-          ToStub.push_back(CB);
-    for (auto *CB : ToStub) {
+      if (auto *CI = dyn_cast<CallInst>(User))
+        if (CI->getCalledFunction() == &F)
+          ToStub.push_back(CI);
+    for (auto *CI : ToStub) {
       // TODO we may want to simulate throwing in stubs. We would need to tweak
       // this in that case.
-      IRBuilder<> IRB(CB);
+      IRBuilder<> IRB(CI);
       Value *V = constructTypeUsingCallbacks(M, IRB, StubValueGenCallback, RTy,
-                                             CB, nullptr);
-      CB->replaceAllUsesWith(V);
-      CB->eraseFromParent();
+                                             CI, nullptr);
+      CI->replaceAllUsesWith(V);
+      CI->eraseFromParent();
     }
   }
 }
