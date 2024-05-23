@@ -8,6 +8,7 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 DATASET="/p/vast1/LExperts/ComPile-Public-V2"
 OUTDIR="/l/ssd/$USER/compile-input-gen-out/"
 LLVM_INSTALL_DIR="/usr/WS1/$USER/opt/input-gen-release"
+JUGDIR="$SCRIPT_DIR/jugfile.jugdata"
 ### Default values
 
 # User provided configuration
@@ -28,15 +29,16 @@ NUM_CPU=${NUM_CPU:="$(nproc --all)"}
 SCRIPT="$SCRIPT_DIR/mass_input_gen.py"
 
 if [ "$JUG" == "run" ]; then
-    JUG_RUN="jug-execute --will-cite"
+    JUG_RUN="jug-execute --jugdir $JUGDIR --will-cite"
     SCRIPT="$SCRIPT_DIR/jugfile.py"
     DASHDASH=--
 elif [ "$JUG" == "status" ]; then
-    JUG_RUN="jug status"
+    JUG_RUN="jug status --jugdir $JUGDIR"
     SCRIPT="$SCRIPT_DIR/jugfile.py"
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --get-jug-results"
     DASHDASH=--
 elif [ "$JUG" == "results" ]; then
+    export JUGDIR
     JUG_RUN=
     SCRIPT="$SCRIPT_DIR/print_mig_jug_results.py"
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --get-jug-results"

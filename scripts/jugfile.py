@@ -40,6 +40,13 @@ parser.add_argument('--get-jug-results', action='store_true')
 args = parser.parse_args()
 
 configuration = jug.Task(note_down_configuration)
+jug.barrier()
+global_conf = jug.task.value(configuration)
+cur_conf = note_down_configuration()
+
+if global_conf != cur_conf:
+    print('Configuration mismatch!!!')
+    print('Original conf: {}\nCurrent conf: {}'.format(global_conf, cur_conf))
 
 if not args.get_jug_results:
 

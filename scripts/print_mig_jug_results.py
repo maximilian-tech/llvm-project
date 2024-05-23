@@ -5,7 +5,7 @@ import sys
 import os
 import functools
 jf = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'jugfile.py')
-jug.init(jf, jf[:-3] + '.jugdata/')
+jug.init(jf, os.environ['JUGDIR'])
 import mass_input_gen as mig
 import jugfile
 
