@@ -453,6 +453,17 @@ class InputGenModule:
                     assert(stats['num_bbs'] is None or stats['num_bbs'] == num_bbs)
                     stats['num_bbs'] = max(num_bbs, stats['num_bbs']) if stats['num_bbs'] is not None else num_bbs
                     stats['num_bbs_executed'].append(num_bbs_executed)
+                else:
+                    # Leave stats['num_bbs'] alone as it is either None or
+                    # contains the proper number of BBs
+
+                    if len(stats['num_bbs_executed']) == 0:
+                        stats['num_bbs_executed'].append(None)
+                    else:
+                        # Inherit the last one as we are aggregating them
+                        # accumulatively
+                        stats['num_bbs_executed'] = stats['num_bbs_executed'][-1]
+
 
 def handle_single_module(task, args):
     (i, module) = task
