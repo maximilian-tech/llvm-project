@@ -6969,7 +6969,7 @@ ChangeStatus AAHeapToStackFunction::updateImpl(Attributor &A) {
         LLVM_DEBUG(
             dbgs()
             << "[H2S] unique free call might not be executed with the allocation "
-            << *UniqueFree << "\n");
+                          << *UniqueFree << "\n");
         return false;
       }
     }
@@ -12335,7 +12335,9 @@ struct AAIndirectCallInfoCallSite : public AAIndirectCallInfo {
     }
 
     // Special handling for the single callee case.
-    if (AllCalleesKnown && AssumedCallees.size() == 1) {
+    if (AllCalleesKnown && AssumedCallees.size() == 1 &&
+        A.shouldSpecializeCallSiteForCallee(*this, *CB,
+                                            *AssumedCallees.back())) {
       auto *NewCallee = AssumedCallees.front();
       if (isLegalToPromote(*CB, NewCallee)) {
         promoteCall(*CB, NewCallee, nullptr);
