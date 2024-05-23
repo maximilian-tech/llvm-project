@@ -68,6 +68,7 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cstdint>
 #include <memory>
+#include <string>
 
 using namespace llvm;
 
@@ -122,8 +123,8 @@ static cl::opt<bool>
 
 static cl::opt<bool>
     ClInstrumentFunctionPtrs("input-gen-instrument-function-ptrs",
-                         cl::desc("Actively handle function pointers"),
-                         cl::Hidden, cl::init(true));
+                             cl::desc("Actively handle function pointers"),
+                             cl::Hidden, cl::init(true));
 
 STATISTIC(NumInstrumented, "Number of instrumented instructions");
 
@@ -811,8 +812,7 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       M.getOrInsertFunction(Prefix + "unreachable", VoidTy, Int32Ty, PtrTy);
 }
 
-Function &InputGenInstrumenter::stubDeclaration(Module &M, FunctionType &FT,
-                                                StringRef Suffix) {
+Function &InputGenInstrumenter::createFunctionPtrStub(Module &M, FunctionType &FT) {
   auto IsEquivalentStub = [&](Function &F) {
     return F.getFunctionType() == &FT &&
            F.getName().starts_with("__inputgen_fpstub_");
@@ -820,7 +820,7 @@ Function &InputGenInstrumenter::stubDeclaration(Module &M, FunctionType &FT,
   if (auto It = find_if(M, IsEquivalentStub); It != M.end())
     return *It;
   auto *F = Function::Create(&FT, GlobalValue::WeakAnyLinkage,
-                             "__inputgen_fpstub_" + Suffix, M);
+                             "__inputgen_fpstub_" + std::to_string(StubNameCounter++), M);
   stubDeclaration(M, *F);
   return *F;
 }
@@ -927,7 +927,8 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
                           << CB.getCaller()->getName() << '\n');
         // Initialize with empty list
         auto &CBList = CallCandidates[CB.getCaller()][&CB];
-        if (CB.getFunctionType() == Callee.getFunctionType())
+        if (CB.getFunctionType() == Callee.getFunctionType() &&
+            CB.getFunction() != &Callee)
           CBList.insert(&Callee);
         else
           LLVM_DEBUG(dbgs() << "ignoring\n");
@@ -964,14 +965,11 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
         LLVM_DEBUG(dbgs() << "    " << Candidate->getName() << '\n');
       }
 
+      Candidates.insert(&createFunctionPtrStub(M, *Call->getFunctionType()));
+
       MDBuilder Builder(F->getContext());
-      if (Candidates.empty()) {
-        // cleanup callee list, if we have none, just use stub later.
-        Call->setMetadata(LLVMContext::MD_callees, nullptr);
-      } else {
-        auto *FilteredCallees = Builder.createCallees(Candidates.getArrayRef());
-        Call->setMetadata(LLVMContext::MD_callees, FilteredCallees);
-      }
+      auto *FilteredCallees = Builder.createCallees(Candidates.getArrayRef());
+      Call->setMetadata(LLVMContext::MD_callees, FilteredCallees);
 
       // todo: well, this only works if the argument is directly called, not
       // there's casts and so on inbetween..
@@ -983,14 +981,12 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
         SmallVector<int> Ops(Call->getNumOperands() - 1, -1);
         for (std::size_t I = 0; I < Ops.size(); ++I) {
           if (auto *OpArg = dyn_cast<Argument>(Call->getOperand(I)))
-            Ops[I] =
-                OpArg->getArgNo(); // Todo: verify if we need to comply with
-                                   // the non inspection and check if the arg
-                                   // has any other uses in this function.
+            Ops[I] = OpArg->getArgNo();
+          // Todo: verify if we need to comply with the non inspection and
+          // check if the arg has any other uses in this function.
         }
         auto *NewCallback = Builder.createCallbackEncoding(
-            Arg->getArgNo(), Ops,
-            false); // FIXME: how do we determine if this is/might be VAArg?
+            Arg->getArgNo(), Ops, Call->getFunctionType()->isVarArg());
         if (auto *ExistingCallbacks =
                 F->getMetadata(LLVMContext::MD_callback)) {
           NewCallback =
@@ -1575,20 +1571,11 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
 Value *InputGenInstrumenter::constructFpFromPotentialCallees(
     const CallBase &Caller, Value &V, IRBuilderBase &IRB,
     SetVector<Instruction *> &ToDelete) {
-  struct Incrementer {
-    int &Counter;
-    Incrementer(int &Init) : Counter(Init) {}
-    ~Incrementer() { Counter++; }
-  } Incr(StubNameCounter);
-
   LLVM_DEBUG(dbgs() << V << " for "
                     << IRB.GetInsertBlock()->getParent()->getName() << '\n');
   auto &M = *IRB.GetInsertBlock()->getModule();
   SetVector<Constant *> CalleeSet;
 
-  // Todo: add this to callee md, as callee md should be the complete set!
-  CalleeSet.insert(&stubDeclaration(M, *Caller.getFunctionType(),
-                                    std::to_string(StubNameCounter)));
   if (auto *CalleesMD = Caller.getMetadata(LLVMContext::MD_callees)) {
     for (auto &CalleeMD : CalleesMD->operands()) {
       auto *CalleeAsVMD = cast<ValueAsMetadata>(CalleeMD)->getValue();
@@ -1619,7 +1606,7 @@ Value *InputGenInstrumenter::constructFpFromPotentialCallees(
     }
     auto *CalleeGV = new GlobalVariable(
         ArrTy, true, GlobalValue::WeakAnyLinkage, CalleeArr,
-        "__inputgen_fp_map_" + std::to_string(StubNameCounter));
+        "__inputgen_fp_map_" + std::to_string(FpMapNameCounter++));
     M.insertGlobalVariable(CalleeGV);
     return CalleeGV;
   }();
