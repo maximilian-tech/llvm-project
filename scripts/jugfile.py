@@ -36,6 +36,7 @@ def note_down_configuration():
 parser = argparse.ArgumentParser('MassInputGenJug')
 mig.add_option_args(parser)
 parser.add_argument('--invalidate-instrumentation-failures', action='store_true')
+parser.add_argument('--get-jug-results', action='store_true')
 args = parser.parse_args()
 
 configuration = jug.Task(note_down_configuration)

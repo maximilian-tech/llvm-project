@@ -8,7 +8,6 @@ import sys
 import multiprocessing
 import functools
 from datasets import load_dataset
-import jug
 import copy
 
 import input_gen_module as igm
@@ -112,7 +111,6 @@ def add_option_args(parser):
     parser.add_argument('--no-precompile-rts',
                         dest='precompile_rts', action='store_false')
     parser.set_defaults(precompile_rts=True)
-    parser.add_argument('--get-jug-results', action='store_true')
 
     igm.add_option_args(parser)
 
