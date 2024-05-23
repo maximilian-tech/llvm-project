@@ -82,8 +82,7 @@ public:
                        IGInstrumentationModeTy Mode,
                        bool InstrumentedForCoverage)
       : Mode(Mode), MAM(MAM), M(M),
-        InstrumentedForCoverage(InstrumentedForCoverage),
-        StubNameCounter(0) {
+        InstrumentedForCoverage(InstrumentedForCoverage), StubNameCounter(0) {
     Ctx = &(M.getContext());
     PtrTy = PointerType::getUnqual(*Ctx);
     Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
@@ -131,7 +130,8 @@ public:
                                      Value *ValueToReplace,
                                      ValueToValueMapTy *VMap);
   Value *constructFpFromPotentialCallees(const CallBase &Caller, Value &V,
-                                         IRBuilderBase &IRB, SetVector<Instruction*>& ToDelete);
+                                         IRBuilderBase &IRB,
+                                         SetVector<Instruction *> &ToDelete);
   void createRecordingEntryPoint(Function &F);
   void createGenerationEntryPoint(Function &F, bool UniqName);
   void createRunEntryPoint(Function &F, bool UniqName);
@@ -141,6 +141,7 @@ public:
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
   void gatherFunctionPtrCallees(Module &M);
   void instrumentFunctionPtrSources(Module &M);
+  void provideFunctionPtrGlobals(Module &M);
   void provideGlobals(Module &M);
   SetVector<Function *> pruneModule(Function &F);
 
