@@ -120,6 +120,11 @@ static cl::opt<bool>
                                   "branches to the input gen runtime"),
                          cl::Hidden, cl::init(true));
 
+static cl::opt<bool>
+    ClInstrumentFunctionPtrs("input-gen-instrument-function-ptrs",
+                         cl::desc("Actively handle function pointers"),
+                         cl::Hidden, cl::init(true));
+
 STATISTIC(NumInstrumented, "Number of instrumented instructions");
 
 namespace {
@@ -625,7 +630,9 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
   switch (IGI.Mode) {
   case IG_Run:
   case IG_Generate:
-    IGI.gatherFunctionPtrCallees(M);
+    if (ClInstrumentFunctionPtrs)
+      IGI.gatherFunctionPtrCallees(M);
+
     if (auto *OldMain = M.getFunction("main"))
       OldMain->setName("__input_gen_user_main");
     break;
@@ -762,13 +769,15 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
   IGI.pruneModule(EntryPoint);
   instrumentModule(M);
   instrumentEntryPoint(M, EntryPoint, /*UniqName=*/false);
-  IGI.instrumentFunctionPtrSources(M);
+  instrumentFunctionPtrs(M);
 
   return true;
 }
 
 bool ModuleInputGenInstrumenter::instrumentFunctionPtrs(Module &M) {
-  IGI.instrumentFunctionPtrSources(M);
+  if (ClInstrumentFunctionPtrs)
+    IGI.instrumentFunctionPtrSources(M);
+  IGI.provideFunctionPtrGlobals(M);
 
   return true;
 }
@@ -1115,7 +1124,9 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
 
   for (auto *VI : ToDelete)
     VI->eraseFromParent();
+}
 
+void InputGenInstrumenter::provideFunctionPtrGlobals(Module &M) {
   // insert global list of all functions to be used for identifying FPs in
   // objects.
   SmallVector<Constant *> FuncVec;
@@ -1787,7 +1798,8 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
   };
 
   SetVector<uint64_t> FPArgs;
-  gatherCallbackArguments(F, FPArgs);
+  if (ClInstrumentFunctionPtrs)
+    gatherCallbackArguments(F, FPArgs);
   SetVector<Instruction *> ToDelete;
   auto GetFPArg = [&](auto &Arg) {
     for (auto *U : Arg.users()) {
