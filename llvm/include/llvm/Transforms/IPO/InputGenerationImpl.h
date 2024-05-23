@@ -82,7 +82,7 @@ public:
                        IGInstrumentationModeTy Mode,
                        bool InstrumentedForCoverage)
       : Mode(Mode), MAM(MAM), M(M),
-        InstrumentedForCoverage(InstrumentedForCoverage), StubNameCounter(0) {
+        InstrumentedForCoverage(InstrumentedForCoverage) {
     Ctx = &(M.getContext());
     PtrTy = PointerType::getUnqual(*Ctx);
     Int1Ty = IntegerType::getIntNTy(*Ctx, 1);
@@ -137,7 +137,7 @@ public:
   void createRunEntryPoint(Function &F, bool UniqName);
   void createGlobalCalls(Module &M, IRBuilder<> &IRB);
   void stubDeclaration(Module &M, Function &F);
-  Function &stubDeclaration(Module &M, FunctionType &FT, StringRef Suffix);
+  Function &createFunctionPtrStub(Module &M, FunctionType &FT);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
   void gatherFunctionPtrCallees(Module &M);
   void instrumentFunctionPtrSources(Module &M);
@@ -178,7 +178,8 @@ private:
   FunctionCallee UnreachableCallback;
 
   bool InstrumentedForCoverage;
-  int StubNameCounter;
+  unsigned StubNameCounter = 0;
+  unsigned FpMapNameCounter = 0;
 };
 
 class ModuleInputGenInstrumenter {
