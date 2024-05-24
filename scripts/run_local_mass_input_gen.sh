@@ -56,9 +56,15 @@ fi
 . "$SCRIPT_DIR/enable.sh" "$LLVM_INSTALL_DIR"
 PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
 
+if [ "$LANGUAGE" == "" ]; then
+    echo Specify LANGUAGE
+    exit 1
+fi
+
 function run() {
     $JUG_RUN "$SCRIPT" $DASHDASH \
         --dataset "$DATASET" \
+        --language "$LANGUAGE" \
         --outdir "$OUTDIR" \
         --start "$START" \
         --end "$END" \

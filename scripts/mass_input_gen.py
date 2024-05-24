@@ -101,6 +101,7 @@ def note_down_configuration(args):
 
 def add_option_args(parser):
     parser.add_argument('--dataset', default='llvm-ml/ComPile')
+    parser.add_argument('--language', required=True)
     parser.add_argument('--outdir', required=True)
 
     parser.add_argument('--start', type=int, default=0)
@@ -124,7 +125,7 @@ if __name__ == '__main__':
     if args.precompile_rts:
         precompile_runtimes(args)
 
-    ds = load_dataset(args.dataset, split='train', streaming=True)
+    ds = load_dataset(os.path.join(args.dataset, args.language), split='train', streaming=True)
 
     os.makedirs(args.outdir, exist_ok=True)
 
