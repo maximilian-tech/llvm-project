@@ -96,6 +96,8 @@ def note_down_configuration(args):
     conf['script_version'] = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], cwd=script_dir).decode('ascii').strip()
     conf['input_gen_version'] = subprocess.check_output(['input-gen', '--version']).decode('ascii')
     conf['args'] = copy.deepcopy(args)
+    # reports a difference everytime one checks otherwise..
+    del conf['args'].get_jug_results
     return conf
 
 def add_option_args(parser):
