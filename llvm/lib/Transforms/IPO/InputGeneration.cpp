@@ -1666,6 +1666,12 @@ void gatherCallbackArguments(Function &F, SetVector<uint64_t> &FPArgs) {
     }
   }
 }
+
+AllocaInst *createSwiftErrorAlloca(IRBuilderBase &IRB) {
+  auto *Alloca = IRB.CreateAlloca(IRB.getPtrTy());
+  Alloca->setSwiftError(true);
+  return Alloca;
+}
 } // namespace
 
 void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
@@ -1701,6 +1707,9 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
   SmallVector<Value *> Args;
   ValueToValueMapTy VMap;
   for (auto &Arg : F.args()) {
+    if (Arg.hasSwiftErrorAttr())
+      Args.push_back(createSwiftErrorAlloca(IRB));
+    else
     Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
                                                Arg.getType(), &Arg, &VMap));
     VMap[&Arg] = Args.back();
@@ -1798,7 +1807,9 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
 
   for (uint64_t A = 0; A < F.arg_size(); ++A) {
     auto &Arg = *F.getArg(A);
-    if (FPArgs.contains(A)) {
+    if (Arg.hasSwiftErrorAttr())
+      Args.push_back(createSwiftErrorAlloca(IRB));
+    else if (FPArgs.contains(A)) {
       assert(!Arg.users().empty() && "Arg must be used when used as FP.");
       Args.push_back(GetFPArg(Arg));
     } else {
