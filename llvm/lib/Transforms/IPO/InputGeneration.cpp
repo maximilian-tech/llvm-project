@@ -926,8 +926,7 @@ void InputGenInstrumenter::removeTokenFunctions(Module &M) {
 
 void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
   SetVector<Function *> Functions;
-  DenseMap<Function *, DenseMap<CallBase *, SetVector<Function *>>>
-      CallCandidates;
+  DenseMap<CallBase *, SetVector<Function *>> CallCandidates;
 
   FunctionAnalysisManager &FAM =
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
@@ -948,10 +947,11 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
   AC.UseLiveness = false;
   AC.DefaultInitializeLiveInternals = false;
   AC.IsClosedWorldModule = true;
-  AC.InitializationCallback = [](Attributor &A, const Function &F) {
+  AC.InitializationCallback = [&](Attributor &A, const Function &F) {
     for (auto &I : instructions(F)) {
       if (auto *CB = dyn_cast<CallBase>(&I)) {
         if (CB->isIndirectCall()) {
+          auto &CBList = CallCandidates[const_cast<CallBase *>(CB)];
           A.getOrCreateAAFor<AAIndirectCallInfo>(
               IRPosition::callsite_function(*CB));
         }
@@ -965,7 +965,7 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
                           << Callee.getName() << " in "
                           << CB.getCaller()->getName() << '\n');
         // Initialize with empty list
-        auto &CBList = CallCandidates[CB.getCaller()][&CB];
+        auto &CBList = CallCandidates[&CB];
         if (CB.getFunctionType() == Callee.getFunctionType() &&
             CB.getFunction() != &Callee)
           CBList.insert(&Callee);
@@ -995,46 +995,43 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
     return false;
   };
 
-  for (auto &F : M) {
-    for (auto &[Call, Candidates] : CallCandidates[&F]) {
-      auto *F = Call->getFunction();
-      LLVM_DEBUG(dbgs() << *Call << " in function " << F->getName() << "\n");
+  for (auto &[Call, Candidates] : CallCandidates) {
+    auto *F = Call->getCaller();
+    LLVM_DEBUG(dbgs() << *Call << " in function " << F->getName() << "\n");
 
-      for (auto *Candidate : Candidates) {
-        LLVM_DEBUG(dbgs() << "    " << Candidate->getName() << '\n');
+    for (auto *Candidate : Candidates) {
+      LLVM_DEBUG(dbgs() << "    " << Candidate->getName() << '\n');
+    }
+
+    Candidates.insert(&createFunctionPtrStub(M, *Call->getFunctionType()));
+
+    MDBuilder Builder(F->getContext());
+    auto *FilteredCallees = Builder.createCallees(Candidates.getArrayRef());
+    Call->setMetadata(LLVMContext::MD_callees, FilteredCallees);
+
+    // todo: well, this only works if the argument is directly called, not
+    // there's casts and so on inbetween..
+    if (auto *Arg = dyn_cast<Argument>(Call->getCalledOperand())) {
+      if (ArgAlreadyCB(*F, Arg->getArgNo()))
+        continue;
+
+      MDBuilder Builder(Arg->getContext());
+      SmallVector<int> Ops(Call->getNumOperands() - 1, -1);
+      for (std::size_t I = 0; I < Ops.size(); ++I) {
+        if (auto *OpArg = dyn_cast<Argument>(Call->getOperand(I)))
+          Ops[I] = OpArg->getArgNo();
+        // Todo: verify if we need to comply with the non inspection and
+        // check if the arg has any other uses in this function.
       }
-
-      Candidates.insert(&createFunctionPtrStub(M, *Call->getFunctionType()));
-
-      MDBuilder Builder(F->getContext());
-      auto *FilteredCallees = Builder.createCallees(Candidates.getArrayRef());
-      Call->setMetadata(LLVMContext::MD_callees, FilteredCallees);
-
-      // todo: well, this only works if the argument is directly called, not
-      // there's casts and so on inbetween..
-      if (auto *Arg = dyn_cast<Argument>(Call->getCalledOperand())) {
-        if (ArgAlreadyCB(*F, Arg->getArgNo()))
-          continue;
-
-        MDBuilder Builder(Arg->getContext());
-        SmallVector<int> Ops(Call->getNumOperands() - 1, -1);
-        for (std::size_t I = 0; I < Ops.size(); ++I) {
-          if (auto *OpArg = dyn_cast<Argument>(Call->getOperand(I)))
-            Ops[I] = OpArg->getArgNo();
-          // Todo: verify if we need to comply with the non inspection and
-          // check if the arg has any other uses in this function.
-        }
-        auto *NewCallback = Builder.createCallbackEncoding(
-            Arg->getArgNo(), Ops, Call->getFunctionType()->isVarArg());
-        if (auto *ExistingCallbacks =
-                F->getMetadata(LLVMContext::MD_callback)) {
-          NewCallback =
-              Builder.mergeCallbackEncodings(ExistingCallbacks, NewCallback);
-        } else {
-          NewCallback = MDNode::get(F->getContext(), {NewCallback});
-        }
-        F->setMetadata(LLVMContext::MD_callback, NewCallback);
+      auto *NewCallback = Builder.createCallbackEncoding(
+          Arg->getArgNo(), Ops, Call->getFunctionType()->isVarArg());
+      if (auto *ExistingCallbacks = F->getMetadata(LLVMContext::MD_callback)) {
+        NewCallback =
+            Builder.mergeCallbackEncodings(ExistingCallbacks, NewCallback);
+      } else {
+        NewCallback = MDNode::get(F->getContext(), {NewCallback});
       }
+      F->setMetadata(LLVMContext::MD_callback, NewCallback);
     }
   }
 }
