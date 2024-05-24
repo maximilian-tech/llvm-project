@@ -13,18 +13,19 @@ import jug
 import mass_input_gen as mig
 import input_gen_module as igm
 
-def handle_single_module_i(i):
+def handle_single_module_i_lang(i, lang):
     ds_i = ds.skip(i)
     row = list(ds_i.take(1))[0]
 
     module = row['content']
     language = row['language']
+    assert(language == lang)
 
     try:
         stats = igm.handle_single_module((i, module), args)
         retry = False
     except Exception as e:
-        print('Retry', i)
+        print('Retry', i, lang)
         stats = igm.get_empty_statistics()
         retry = True
 
@@ -66,9 +67,9 @@ if not args.get_jug_results:
 
     if args.verbose:
         print('Will input gen for dataset {} in {}'.format(args.dataset, args.outdir))
-    ds = load_dataset(args.dataset, split='train', streaming=True)
+    ds = load_dataset(os.path.join(args.dataset, args.language), split='train', streaming=True)
     os.makedirs(args.outdir, exist_ok=True)
 
 tasks = []
 for i in range(args.start, args.end):
-    tasks.append(jug.Task(handle_single_module_i, i))
+    tasks.append(jug.Task(handle_single_module_i_lang, i, args.language))
