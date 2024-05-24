@@ -21,8 +21,8 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <type_traits>
-#include <unordered_map>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 
 #include "rt.hpp"
@@ -120,17 +120,39 @@ struct ObjectTy {
     intptr_t InputOffset;
     intptr_t OutputSize;
     intptr_t OutputOffset;
+    intptr_t CmpSize;
+    intptr_t CmpOffset;
   };
 
+  void comparedAt(VoidPtrTy Ptr) {
+    intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
+    CmpLimits.update(Offset, 1);
+  }
+
   AlignedMemoryChunk getAlignedInputMemory() {
+    // If we compare the pointer at some offset we need to make sure the output
+    // allocation will contain those locations, otherwise comparisons may differ
+    // in input-gen and input-run as we would compare against an offset in a
+    // different object
+    if (!OutputLimits.isEmpty()) {
+      OutputLimits.update(CmpLimits.LowestOffset, CmpLimits.getSize());
+      // We no longer need the CmpLimits, reset it
+      CmpLimits = Limits();
+    }
+
     VoidPtrTy InputStart =
         InputLimits.LowestOffset + Input.Memory - Input.AllocationOffset;
     VoidPtrTy InputEnd =
         InputLimits.HighestOffset + Input.Memory - Input.AllocationOffset;
     intptr_t OutputStart = alignStart(OutputLimits.LowestOffset, ObjAlignment);
     intptr_t OutputEnd = alignEnd(OutputLimits.HighestOffset, ObjAlignment);
-    return {InputStart, InputEnd - InputStart, InputLimits.LowestOffset,
-            OutputEnd - OutputStart, OutputStart};
+    return {InputStart,
+            InputEnd - InputStart,
+            InputLimits.LowestOffset,
+            OutputEnd - OutputStart,
+            OutputStart,
+            CmpLimits.getSize(),
+            CmpLimits.LowestOffset};
   }
 
   template <typename T>
@@ -234,6 +256,8 @@ private:
     bool Initialized = false;
     intptr_t LowestOffset = 0;
     intptr_t HighestOffset = 0;
+    bool isEmpty() { return !Initialized; }
+    intptr_t getSize() { return HighestOffset - LowestOffset; }
     void update(intptr_t Offset, uint32_t Size) {
       if (!Initialized) {
         Initialized = true;
@@ -247,7 +271,7 @@ private:
         HighestOffset = Offset + Size;
     }
   };
-  Limits InputLimits, OutputLimits;
+  Limits InputLimits, OutputLimits, CmpLimits;
 
   bool allUsed(intptr_t Offset, uint32_t Size) {
     for (unsigned It = 0; It < Size; It++)
@@ -447,9 +471,8 @@ struct InputGenRTTy {
 
   // Returns nullptr if it is not an object managed by us - a stack pointer or
   // memory allocated by malloc
-  ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr) {
-    assert(GlobalPtr);
-    size_t Idx = getObjIdx(GlobalPtr);
+  ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr, bool AllowNull = false) {
+    size_t Idx = getObjIdx(GlobalPtr, AllowNull);
     bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
     [[maybe_unused]] bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
     assert(IsExistingObj || IsOutsideObjMemory);
@@ -464,6 +487,13 @@ struct InputGenRTTy {
   }
 
   void cmpPtr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
+    ObjectTy *ObjA = globalPtrToObj(A, /*AllowNull=*/true);
+    if (ObjA)
+      ObjA->comparedAt(OA.globalPtrToLocalPtr(A));
+    ObjectTy *ObjB = globalPtrToObj(B, /*AllowNull=*/true);
+    if (ObjB)
+      ObjB->comparedAt(OA.globalPtrToLocalPtr(B));
+
     if (!InputGenConf.EnablePtrCmpRetry)
       return;
 
@@ -716,12 +746,14 @@ struct InputGenRTTy {
     return nullptr;
   }
 
-  template <> FunctionPtrTy getNewValue<FunctionPtrTy>(BranchHint *BHs, int32_t BHSize) {
+  template <>
+  FunctionPtrTy getNewValue<FunctionPtrTy>(BranchHint *BHs, int32_t BHSize) {
     NumNewValues++;
     return nullptr;
   }
 
   template <typename T> void write(VoidPtrTy Ptr, T Val, uint32_t Size) {
+    assert(Ptr);
     ObjectTy *Obj = globalPtrToObj(Ptr);
     if (Obj)
       Obj->write<T>(Val, OA.globalPtrToLocalPtr(Ptr), Size);
@@ -730,6 +762,7 @@ struct InputGenRTTy {
   template <typename T>
   T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
          int32_t BHSize) {
+    assert(Ptr);
     ObjectTy *Obj = globalPtrToObj(Ptr);
     if (Obj)
       return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize);
@@ -747,6 +780,7 @@ struct InputGenRTTy {
 
   void registerFunctionPtrAccess(VoidPtrTy Ptr, uint32_t Size,
                                  VoidPtrTy *PotentialFPs, uint64_t N) {
+    assert(Ptr);
     ObjectTy *Obj = globalPtrToObj(Ptr);
     assert(Obj && "FP Object should just have been created.");
     VoidPtrTy FP = PotentialFPs[rand() % N];
@@ -823,17 +857,20 @@ struct InputGenRTTy {
     uintptr_t I = 0;
     for (auto &Obj : Objects) {
       auto MemoryChunk = Obj->getAlignedInputMemory();
-      INPUTGEN_DEBUG(
-          printf("Obj #%zu aligned memory chunk at %p, input size %lu, input "
-                 "offset %ld, output size %lu, output offset %ld\n",
-                 Obj->Idx, (void *)MemoryChunk.Ptr, MemoryChunk.InputSize,
-                 MemoryChunk.InputOffset, MemoryChunk.OutputSize,
-                 MemoryChunk.OutputOffset));
+      INPUTGEN_DEBUG(printf(
+          "Obj #%zu aligned memory chunk at %p, input size %lu "
+          "offset %ld, output size %lu offset %ld, cmp size %lu offset %ld\n",
+          Obj->Idx, (void *)MemoryChunk.Ptr, MemoryChunk.InputSize,
+          MemoryChunk.InputOffset, MemoryChunk.OutputSize,
+          MemoryChunk.OutputOffset, MemoryChunk.CmpSize,
+          MemoryChunk.CmpOffset));
       writeV<intptr_t>(InputOut, I);
       writeV<intptr_t>(InputOut, MemoryChunk.InputSize);
       writeV<intptr_t>(InputOut, MemoryChunk.InputOffset);
       writeV<intptr_t>(InputOut, MemoryChunk.OutputSize);
       writeV<intptr_t>(InputOut, MemoryChunk.OutputOffset);
+      writeV<intptr_t>(InputOut, MemoryChunk.CmpSize);
+      writeV<intptr_t>(InputOut, MemoryChunk.CmpOffset);
       InputOut.write(reinterpret_cast<char *>(MemoryChunk.Ptr),
                      MemoryChunk.InputSize);
       TotalSize += MemoryChunk.OutputSize;
@@ -958,7 +995,8 @@ VoidPtrTy __inputgen_select_fp(VoidPtrTy *PotentialFPs, uint64_t N) {
 
 void __inputgen_access_fp(VoidPtrTy Ptr, int32_t Size, VoidPtrTy Base,
                           VoidPtrTy *PotentialFPs, uint64_t N) {
-  if (!getInputGenRT().read<FunctionPtrTy>(Ptr, Base, Size, /* BHs */ nullptr, 0)) {
+  if (!getInputGenRT().read<FunctionPtrTy>(Ptr, Base, Size, /* BHs */ nullptr,
+                                           0)) {
     getInputGenRT().registerFunctionPtrAccess(Ptr, Size, PotentialFPs, N);
     return;
   }

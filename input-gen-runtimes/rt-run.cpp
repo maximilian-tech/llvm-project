@@ -11,6 +11,8 @@
 #include <random>
 #include <vector>
 
+#include <sys/mman.h>
+
 #include "rt.hpp"
 
 namespace {
@@ -143,9 +145,23 @@ int main(int argc, char **argv) {
   char *Memory = ccast(calloc(MemSize, 1));
   INPUTGEN_DEBUG(printf("MemSize %lu : %p\n", MemSize, (void *)Memory));
 
+  static constexpr size_t PtrCmpRegionSize =
+      (uintptr_t)64 /*G*/ * 1024 /*M*/ * 1024 /*K*/ * 1024;
+  void *PtrCmpRegion = reinterpret_cast<VoidPtrTy>(
+      mmap(nullptr, PtrCmpRegionSize, PROT_NONE,
+           MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0));
+  if (PtrCmpRegion == MAP_FAILED) {
+    perror("PtrCmpRegion allocation failed");
+    free(Memory);
+    exit(1);
+  }
+
   auto NumObjects = readV<uint32_t>(Input);
   INPUTGEN_DEBUG(printf("NO %u\n", NumObjects));
   VoidPtrTy CurMemory = (VoidPtrTy)Memory;
+  // Increment by 1 just in case because apparently mmap can return a valid null
+  // pointer
+  VoidPtrTy CurPtrCmpMemory = (VoidPtrTy)PtrCmpRegion + 1;
   std::vector<ObjectTy> Objects;
   for (uint32_t I = 0; I < NumObjects; I++) {
     [[maybe_unused]] auto Idx = readV<uintptr_t>(Input);
@@ -154,14 +170,36 @@ int main(int argc, char **argv) {
     auto InputOffset = readV<intptr_t>(Input);
     auto OutputSize = readV<intptr_t>(Input);
     auto OutputOffset = readV<intptr_t>(Input);
+    auto CmpSize = readV<intptr_t>(Input);
+    auto CmpOffset = readV<intptr_t>(Input);
     INPUTGEN_DEBUG(printf("O #%u -> input size %ld offset %ld, output size %ld "
-                          "offset %ld at %p\n",
+                          "offset %ld, cmp size %ld offset %ld at %p\n",
                           I, InputSize, InputOffset, OutputSize, OutputOffset,
-                          (void *)CurMemory));
-    Objects.push_back(
-        {CurMemory, InputSize, InputOffset, OutputSize, OutputOffset});
-    Input.read(ccast(CurMemory - OutputOffset + InputOffset), InputSize);
+                          CmpSize, CmpOffset, (void *)CurMemory));
+    VoidPtrTy ObjStart = CurMemory;
     CurMemory += OutputSize;
+    if (OutputSize == 0) {
+      assert(InputSize == 0);
+      // This means this object was never dereferenced. We still however need to
+      // reserve memory space for it in order to ensure no comparisons between
+      // different objects succeed/fail on accident because we relocated the
+      // pointers
+      ObjStart = CurPtrCmpMemory;
+
+      // Just in case make the object at least 1 byte because it may have been
+      // cast to a integer and then compared and we would then have missed the
+      // comparison
+      CmpSize = std::max(CmpSize, (intptr_t)1);
+
+      CurPtrCmpMemory += CmpSize;
+      OutputSize = CmpSize;
+      OutputOffset = CmpOffset;
+    } else {
+      assert(CmpSize == 0);
+    }
+    Objects.push_back(
+        {ObjStart, InputSize, InputOffset, OutputSize, OutputOffset});
+    Input.read(ccast(ObjStart - OutputOffset + InputOffset), InputSize);
   }
 
   auto NumGlobals = readV<uint32_t>(Input);
@@ -265,4 +303,5 @@ int main(int argc, char **argv) {
   // TODO: we intercept free
   free(ArgsMemory);
   free(Memory);
+  munmap(PtrCmpRegion, PtrCmpRegionSize);
 }
