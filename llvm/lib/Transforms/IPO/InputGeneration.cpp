@@ -45,7 +45,9 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
@@ -67,6 +69,7 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <string>
 
@@ -810,15 +813,17 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       M.getOrInsertFunction(Prefix + "unreachable", VoidTy, Int32Ty, PtrTy);
 }
 
-Function &InputGenInstrumenter::createFunctionPtrStub(Module &M, FunctionType &FT) {
+Function &InputGenInstrumenter::createFunctionPtrStub(Module &M,
+                                                      FunctionType &FT) {
   auto IsEquivalentStub = [&](Function &F) {
     return F.getFunctionType() == &FT &&
            F.getName().starts_with("__inputgen_fpstub_");
   };
   if (auto It = find_if(M, IsEquivalentStub); It != M.end())
     return *It;
-  auto *F = Function::Create(&FT, GlobalValue::WeakAnyLinkage,
-                             "__inputgen_fpstub_" + std::to_string(StubNameCounter++), M);
+  auto *F = Function::Create(
+      &FT, GlobalValue::WeakAnyLinkage,
+      "__inputgen_fpstub_" + std::to_string(StubNameCounter++), M);
   stubDeclaration(M, *F);
   return *F;
 }
@@ -884,9 +889,7 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
 }
 
 void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
-  SetVector<Function *> Functions;
-  DenseMap<Function *, DenseMap<CallBase *, SetVector<Function *>>>
-      CallCandidates;
+  SetVector<CallBase *> Calls;
 
   FunctionAnalysisManager &FAM =
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
@@ -895,6 +898,8 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
   CallGraphUpdater CGUpdater;
   BumpPtrAllocator Allocator;
   InformationCache InfoCache(M, AG, Allocator, nullptr);
+
+  SetVector<Function *> Functions;
   for (Function &F : M)
     Functions.insert(&F);
 
@@ -907,31 +912,21 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
   AC.UseLiveness = false;
   AC.DefaultInitializeLiveInternals = false;
   AC.IsClosedWorldModule = true;
-  AC.InitializationCallback = [](Attributor &A, const Function &F) {
+  AC.InitializationCallback = [&Calls](Attributor &A,
+                                                const Function &F) {
     for (auto &I : instructions(F)) {
       if (auto *CB = dyn_cast<CallBase>(&I)) {
         if (CB->isIndirectCall()) {
           A.getOrCreateAAFor<AAIndirectCallInfo>(
               IRPosition::callsite_function(*CB));
+          Calls.insert(const_cast<CallBase *>(CB));
         }
       }
     }
   };
   AC.IndirectCalleeSpecializationCallback =
       [&](Attributor &, const AbstractAttribute &AA, CallBase &CB,
-          Function &Callee) {
-        LLVM_DEBUG(dbgs() << "spec candidate: " << CB << " calls "
-                          << Callee.getName() << " in "
-                          << CB.getCaller()->getName() << '\n');
-        // Initialize with empty list
-        auto &CBList = CallCandidates[CB.getCaller()][&CB];
-        if (CB.getFunctionType() == Callee.getFunctionType() &&
-            CB.getFunction() != &Callee)
-          CBList.insert(&Callee);
-        else
-          LLVM_DEBUG(dbgs() << "ignoring\n");
-        return false;
-      };
+          Function &Callee) { return false; };
 
   Attributor A(Functions, InfoCache, AC);
   for (Function &F : M)
@@ -954,52 +949,64 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
     return false;
   };
 
-  for (auto &F : M) {
-    for (auto &[Call, Candidates] : CallCandidates[&F]) {
-      auto *F = Call->getFunction();
-      LLVM_DEBUG(dbgs() << *Call << " in function " << F->getName() << "\n");
-
-      for (auto *Candidate : Candidates) {
-        LLVM_DEBUG(dbgs() << "    " << Candidate->getName() << '\n');
+  auto CandidatesFromCalleeMD = [](CallBase &CB) {
+    SmallVector<Function *> Callees;
+    if (auto *CalleesMD = CB.getMetadata(LLVMContext::MD_callees)) {
+      for (auto &CalleeMD : CalleesMD->operands()) {
+        auto *CalleeAsVMD = cast<ValueAsMetadata>(CalleeMD)->getValue();
+        auto *Callee = cast<Function>(CalleeAsVMD);
+        if (CB.getFunctionType() == Callee->getFunctionType() &&
+            CB.getFunction() != Callee)
+          Callees.push_back(Callee);
       }
+    }
+    return Callees;
+  };
 
-      Candidates.insert(&createFunctionPtrStub(M, *Call->getFunctionType()));
+  for (auto *Call : Calls) {
+    auto *F = Call->getFunction();
+    LLVM_DEBUG(dbgs() << *Call << " in function " << F->getName() << "\n");
 
-      MDBuilder Builder(F->getContext());
-      auto *FilteredCallees = Builder.createCallees(Candidates.getArrayRef());
-      Call->setMetadata(LLVMContext::MD_callees, FilteredCallees);
+    auto Candidates = CandidatesFromCalleeMD(*Call);
 
-      // todo: well, this only works if the argument is directly called, not
-      // there's casts and so on inbetween..
-      if (auto *Arg = dyn_cast<Argument>(Call->getCalledOperand())) {
-        if (ArgAlreadyCB(*F, Arg->getArgNo()))
-          continue;
+    for (auto *Candidate : Candidates) {
+      LLVM_DEBUG(dbgs() << "    " << Candidate->getName() << '\n');
+    }
 
-        MDBuilder Builder(Arg->getContext());
-        SmallVector<int> Ops(Call->getNumOperands() - 1, -1);
-        for (std::size_t I = 0; I < Ops.size(); ++I) {
-          if (auto *OpArg = dyn_cast<Argument>(Call->getOperand(I)))
-            Ops[I] = OpArg->getArgNo();
-          // Todo: verify if we need to comply with the non inspection and
-          // check if the arg has any other uses in this function.
-        }
-        auto *NewCallback = Builder.createCallbackEncoding(
-            Arg->getArgNo(), Ops, Call->getFunctionType()->isVarArg());
-        if (auto *ExistingCallbacks =
-                F->getMetadata(LLVMContext::MD_callback)) {
-          NewCallback =
-              Builder.mergeCallbackEncodings(ExistingCallbacks, NewCallback);
-        } else {
-          NewCallback = MDNode::get(F->getContext(), {NewCallback});
-        }
-        F->setMetadata(LLVMContext::MD_callback, NewCallback);
+    Candidates.push_back(&createFunctionPtrStub(M, *Call->getFunctionType()));
+
+    MDBuilder Builder(F->getContext());
+    auto *FilteredCallees = Builder.createCallees(Candidates);
+    Call->setMetadata(LLVMContext::MD_callees, FilteredCallees);
+
+    // todo: well, this only works if the argument is directly called, not
+    // there's casts and so on inbetween..
+    if (auto *Arg = dyn_cast<Argument>(Call->getCalledOperand())) {
+      if (ArgAlreadyCB(*F, Arg->getArgNo()))
+        continue;
+
+      MDBuilder Builder(Arg->getContext());
+      SmallVector<int> Ops(Call->getNumOperands() - 1, -1);
+      for (std::size_t I = 0; I < Ops.size(); ++I) {
+        if (auto *OpArg = dyn_cast<Argument>(Call->getOperand(I)))
+          Ops[I] = OpArg->getArgNo();
+        // Todo: verify if we need to comply with the non inspection and
+        // check if the arg has any other uses in this function.
       }
+      auto *NewCallback = Builder.createCallbackEncoding(
+          Arg->getArgNo(), Ops, Call->getFunctionType()->isVarArg());
+      if (auto *ExistingCallbacks = F->getMetadata(LLVMContext::MD_callback)) {
+        NewCallback =
+            Builder.mergeCallbackEncodings(ExistingCallbacks, NewCallback);
+      } else {
+        NewCallback = MDNode::get(F->getContext(), {NewCallback});
+      }
+      F->setMetadata(LLVMContext::MD_callback, NewCallback);
     }
   }
 }
 
 void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
-  SetVector<Function *> Functions;
 
   FunctionAnalysisManager &FAM =
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
@@ -1008,9 +1015,12 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
   CallGraphUpdater CGUpdater;
   BumpPtrAllocator Allocator;
   InformationCache InfoCache(M, AG, Allocator, nullptr);
+
+  SetVector<Function *> Functions;
   for (Function &F : M)
     Functions.insert(&F);
 
+  // clang-format off
   DenseSet<const char *> Allowed({
       &AAPotentialValues::ID,
       &AACallEdges::ID,
@@ -1033,6 +1043,7 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
       &AAUnderlyingObjects::ID,
       &AAValueConstantRange::ID,
   });
+  // clang-format on
 
   AttributorConfig AC(CGUpdater);
   AC.IsModulePass = true;
@@ -1569,7 +1580,7 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
 Value *InputGenInstrumenter::constructFpFromPotentialCallees(
     const CallBase &Caller, Value &V, IRBuilderBase &IRB,
     SetVector<Instruction *> &ToDelete) {
-  LLVM_DEBUG(dbgs() << V << " for "
+  LLVM_DEBUG(dbgs() << "get suitable FP " << V << " for "
                     << IRB.GetInsertBlock()->getParent()->getName() << '\n');
   auto &M = *IRB.GetInsertBlock()->getModule();
   SetVector<Constant *> CalleeSet;
@@ -1580,7 +1591,6 @@ Value *InputGenInstrumenter::constructFpFromPotentialCallees(
       auto *Callee = cast<Function>(CalleeAsVMD);
 
       CalleeSet.insert(Callee);
-      LLVM_DEBUG(dbgs() << Callee->getName() << '\n');
     }
   }
 
@@ -1710,8 +1720,8 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
     if (Arg.hasSwiftErrorAttr())
       Args.push_back(createSwiftErrorAlloca(IRB));
     else
-    Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
-                                               Arg.getType(), &Arg, &VMap));
+      Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
+                                                 Arg.getType(), &Arg, &VMap));
     VMap[&Arg] = Args.back();
   }
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");

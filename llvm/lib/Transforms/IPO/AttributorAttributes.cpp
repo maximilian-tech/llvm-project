@@ -12327,12 +12327,12 @@ struct AAIndirectCallInfoCallSite : public AAIndirectCallInfo {
 
     // If we know all callees and there are none, the call site is (effectively)
     // dead (or UB).
-    if (AssumedCallees.empty()) {
-      assert(AllCalleesKnown &&
-             "Expected all callees to be known if there are none.");
-      A.changeToUnreachableAfterManifest(CB);
-      return ChangeStatus::CHANGED;
-    }
+    // if (AssumedCallees.empty()) {
+    //   assert(AllCalleesKnown &&
+    //          "Expected all callees to be known if there are none.");
+    //   A.changeToUnreachableAfterManifest(CB);
+    //   return ChangeStatus::CHANGED;
+    // }
 
     // Special handling for the single callee case.
     if (AllCalleesKnown && AssumedCallees.size() == 1 &&
