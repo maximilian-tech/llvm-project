@@ -197,7 +197,7 @@ class InputGenModule:
                     with tempfile.NamedTemporaryFile() as temp_profdata:
                         for j in range(i):
                             for func in self.functions:
-                                prof_file = func.profile_files[func.inputs[j]]
+                                prof_file = func.profile_files.get(func.inputs[j])
                                 if prof_file is not None:
                                     self.merge_profdata(temp_profdata.name, prof_file)
                         self.instrument(temp_profdata.name)
@@ -425,7 +425,7 @@ class InputGenModule:
         with tempfile.NamedTemporaryFile() as temp_profdata:
             for i in range(self.input_gen_num):
                 for func in self.functions:
-                    prof_file = func.profile_files[func.inputs[i]]
+                    prof_file = func.profile_files.get(func.inputs[i])
                     if prof_file is not None:
                         self.merge_profdata(temp_profdata.name, prof_file)
 
