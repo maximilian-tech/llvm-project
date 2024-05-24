@@ -53,6 +53,10 @@ if ! [ -z ${INPUT_GEN_ENABLE_BRANCH_HINTS+x} ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --branch-hints"
 fi
 
+if [ "$INPUT_GEN_ENABLE_BRANCH_HINTS" ==  "" ]; then
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --disable-fp-handling"
+fi
+
 . "$SCRIPT_DIR/enable.sh" "$LLVM_INSTALL_DIR"
 PYTHONPATH="$PYTHONPATH:$SCRIPT_DIR"
 
