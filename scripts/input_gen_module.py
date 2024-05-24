@@ -462,7 +462,7 @@ class InputGenModule:
                     else:
                         # Inherit the last one as we are aggregating them
                         # accumulatively
-                        stats['num_bbs_executed'] = stats['num_bbs_executed'][-1]
+                        stats['num_bbs_executed'].append(stats['num_bbs_executed'][-1])
 
 
 def handle_single_module(task, args):
