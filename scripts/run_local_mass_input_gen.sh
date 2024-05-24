@@ -51,11 +51,11 @@ if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 
-if ! [ -z ${INPUT_GEN_ENABLE_BRANCH_HINTS+x} ]; then
+if [ "$INPUT_GEN_ENABLE_BRANCH_HINTS" != "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --branch-hints"
 fi
 
-if [ "$INPUT_GEN_ENABLE_BRANCH_HINTS" ==  "" ]; then
+if [ "$INPUT_GEN_ENABLE_FUNC_PTR" ==  "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --disable-fp-handling"
 fi
 
