@@ -634,8 +634,6 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
     if (ClInstrumentFunctionPtrs)
       IGI.gatherFunctionPtrCallees(M);
 
-    if (auto *OldMain = M.getFunction("main"))
-      OldMain->setName("__input_gen_user_main");
     break;
   case IG_Record:
     break;
