@@ -139,6 +139,7 @@ public:
   void stubDeclaration(Module &M, Function &F);
   Function &createFunctionPtrStub(Module &M, FunctionType &FT);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
+  void removeTokenFunctions(Module &M);
   void gatherFunctionPtrCallees(Module &M);
   void instrumentFunctionPtrSources(Module &M);
   void provideFunctionPtrGlobals(Module &M);

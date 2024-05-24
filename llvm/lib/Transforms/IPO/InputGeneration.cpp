@@ -223,13 +223,16 @@ void InputGenInstrumenter::instrumentMemIntrinsic(MemIntrinsic *MI) {
   IRB.SetCurrentDebugLocation(MI->getDebugLoc());
   if (isa<MemTransferInst>(MI)) {
     auto Callee = isa<MemMoveInst>(MI) ? InputGenMemmove : InputGenMemcpy;
-    IRB.CreateCall(Callee, {MI->getOperand(0), MI->getOperand(1),
+    auto *Tgt = IRB.CreateAddrSpaceCast(MI->getOperand(0), PtrTy);
+    auto *Src = IRB.CreateAddrSpaceCast(MI->getOperand(1), PtrTy);
+    IRB.CreateCall(Callee, {Tgt, Src,
                             IRB.CreateZExtOrTrunc(
                                 MI->getOperand(2),
                                 Callee.getFunctionType()->getParamType(2))});
   } else if (isa<MemSetInst>(MI)) {
+    auto *Tgt = IRB.CreateAddrSpaceCast(MI->getOperand(0), PtrTy);
     IRB.CreateCall(InputGenMemset,
-                   {MI->getOperand(0), MI->getOperand(1),
+                   {Tgt, MI->getOperand(1),
                     IRB.CreateZExtOrTrunc(
                         MI->getOperand(2),
                         InputGenMemset.getFunctionType()->getParamType(2))});
@@ -288,11 +291,12 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
   if (!Access.Addr)
     return std::nullopt;
 
-  // Do not instrument accesses from different address spaces; we cannot deal
-  // with them.
-  Type *PtrTy = cast<PointerType>(Access.Addr->getType()->getScalarType());
-  if (PtrTy->getPointerAddressSpace() != 0)
-    return std::nullopt;
+  // For now, we simply cast our way through. This might not be the best
+  // solution though. We might want to strip AS completely from the module in
+  // the future. Type *PtrTy =
+  // cast<PointerType>(Access.Addr->getType()->getScalarType()); if
+  // (PtrTy->getPointerAddressSpace() != 0)
+  //  return std::nullopt;
 
   // Ignore swifterror addresses.
   // swifterror memory addresses are mem2reg promoted by instruction
@@ -350,8 +354,9 @@ void InputGenInstrumenter::instrumentCmp(ICmpInst *Cmp) {
     return;
 
   IRBuilder<> IRB(Cmp);
-  IRB.CreateCall(CmpPtrCallback, {Cmp->getOperand(0), Cmp->getOperand(1),
-                                  IRB.getInt32(Cmp->getPredicate())});
+  auto *LHS = IRB.CreateAddrSpaceCast(Cmp->getOperand(0), PtrTy);
+  auto *RHS = IRB.CreateAddrSpaceCast(Cmp->getOperand(1), PtrTy);
+  IRB.CreateCall(CmpPtrCallback, {LHS, RHS, IRB.getInt32(Cmp->getPredicate())});
 }
 
 void InputGenInstrumenter::instrumentMop(const InterestingMemoryAccess &Access,
@@ -531,11 +536,15 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
     Val = ConstantInt::getNullValue(Int64Ty);
   }
 
-  SmallVector<Value *, 7> Args = {Addr, Val,
-                                  ConstantInt::get(Int32Ty, AllocSize), Object,
+  auto *Ptr = IRB.CreateAddrSpaceCast(Addr, PtrTy);
+  auto *Base = IRB.CreateAddrSpaceCast(Object, PtrTy);
+  SmallVector<Value *, 7> Args = {Ptr, Val,
+                                  ConstantInt::get(Int32Ty, AllocSize), Base,
                                   ConstantInt::get(Int32Ty, Kind)};
   auto Hints = getBranchHints(ValueToReplace, IRB);
   Args.insert(Args.end(), Hints.begin(), Hints.end());
+  if (isa<PointerType>(AccessTy) && AccessTy->getPointerAddressSpace())
+    AccessTy = AccessTy->getPointerTo();
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
   if (!Fn.getCallee()) {
     LLVM_DEBUG(dbgs() << "No memory access callback for " << *AccessTy << "\n");
@@ -628,9 +637,12 @@ void ModuleInputGenInstrumenter::renameGlobals(Module &M,
 
 bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
 
+  IGI.initializeCallbacks(M);
+
   switch (IGI.Mode) {
   case IG_Run:
   case IG_Generate:
+    IGI.removeTokenFunctions(M);
     if (ClInstrumentFunctionPtrs)
       IGI.gatherFunctionPtrCallees(M);
 
@@ -639,7 +651,6 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
     break;
   }
 
-  IGI.initializeCallbacks(M);
   IGI.provideGlobals(M);
 
   renameGlobals(M, *TLI);
@@ -880,6 +891,36 @@ void InputGenInstrumenter::stubDeclarations(Module &M, TargetLibraryInfo &TLI) {
     if (!shouldPreserveFuncName(F, TLI))
       F.setName("__inputgen_renamed_" + F.getName());
     stubDeclaration(M, F);
+  }
+}
+
+void InputGenInstrumenter::removeTokenFunctions(Module &M) {
+  auto RemoveFn = [&](Function &Fn) {
+    while (!Fn.user_empty()) {
+      auto *I = cast<Instruction>(Fn.user_back());
+      if (I->getType()->isTokenTy()) {
+        while (!I->user_empty()) {
+          auto *UI = cast<Instruction>(I->user_back());
+          UI->eraseFromParent();
+        }
+      }
+      I->replaceAllUsesWith(UndefValue::get(I->getType()));
+      I->eraseFromParent();
+    }
+  };
+
+  for (auto &Fn : M) {
+    if (!Fn.isDeclaration())
+      continue;
+    if (Fn.getReturnType()->isTokenTy()) {
+      RemoveFn(Fn);
+      continue;
+    }
+    for (auto &Arg : Fn.args())
+      if (Arg.getType()->isTokenTy()) {
+        RemoveFn(Fn);
+        break;
+      }
   }
 }
 
@@ -1555,13 +1596,18 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
       llvm_unreachable("Scalable vectors unsupported.");
     }
   } else {
+    auto *OrigTy = T;
+    if (isa<PointerType>(T) && T->getPointerAddressSpace())
+      T = T->getPointerTo();
     FunctionCallee Fn = CC[T];
     if (!Fn.getCallee()) {
       LLVM_DEBUG(dbgs() << "No value gen callback for " << *T << "\n");
       IRB.CreateIntrinsic(VoidTy, Intrinsic::trap, {});
       return UndefValue::get(T);
     } else {
-      return IRB.CreateCall(Fn, getBranchHints(ValueToReplace, IRB, VMap));
+      return IRB.CreateAddrSpaceCast(
+          IRB.CreateCall(Fn, getBranchHints(ValueToReplace, IRB, VMap)),
+          OrigTy);
     }
   }
 }
