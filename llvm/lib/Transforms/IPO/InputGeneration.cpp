@@ -514,7 +514,7 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
     int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object,
     Value *ValueToReplace) {
 
-  Value *Val;
+  Value *Val = ConstantInt::getNullValue(Int64Ty);
   if (V) {
     // If the value cannot fit in an i64, we need to pass it by reference.
     if (AllocSize > 8) {
@@ -526,14 +526,13 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
       Val = IRB.CreateBitOrPointerCast(Alloca, Int64Ty);
     } else if (AccessTy->isIntOrIntVectorTy()) {
       Val = IRB.CreateZExtOrTrunc(V, Int64Ty);
-    } else {
+    } else if (V->getType()->canLosslesslyBitCastTo(
+                   IntegerType::get(IRB.getContext(), AllocSize * 8))) {
       Val = IRB.CreateZExtOrTrunc(
           IRB.CreateBitOrPointerCast(
               V, IntegerType::get(IRB.getContext(), AllocSize * 8)),
           Int64Ty);
     }
-  } else {
-    Val = ConstantInt::getNullValue(Int64Ty);
   }
 
   auto *Ptr = IRB.CreateAddrSpaceCast(Addr, PtrTy);
@@ -951,7 +950,8 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
     for (auto &I : instructions(F)) {
       if (auto *CB = dyn_cast<CallBase>(&I)) {
         if (CB->isIndirectCall()) {
-          auto &CBList = CallCandidates[const_cast<CallBase *>(CB)];
+          // Insert the CB
+          CallCandidates[const_cast<CallBase *>(CB)];
           A.getOrCreateAAFor<AAIndirectCallInfo>(
               IRPosition::callsite_function(*CB));
         }
@@ -1578,6 +1578,16 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
           {It});
     }
     return V;
+  } else if (auto *AT = dyn_cast<ArrayType>(T)) {
+    Type *ElTy = AT->getElementType();
+    auto Count = AT->getArrayNumElements();
+    Value *V = UndefValue::get(AT);
+    for (unsigned It = 0; It < Count; It++) {
+      V = IRB.CreateInsertValue(
+          V, constructTypeUsingCallbacks(M, IRB, CC, ElTy, nullptr, VMap),
+          {It});
+    }
+    return V;
   } else if (auto *VT = dyn_cast<VectorType>(T)) {
     Type *ElTy = VT->getElementType();
     if (!VT->getElementCount().isScalable()) {
@@ -1810,6 +1820,14 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
       Value *V = UndefValue::get(ST);
       for (unsigned It = 0; It < ST->getNumElements(); It++) {
         Type *ElTy = ST->getElementType(It);
+        V = IRB.CreateInsertValue(V, HandleType(ElTy, nullptr), {It});
+      }
+      return V;
+    } else if (auto *AT = dyn_cast<ArrayType>(T)) {
+      Type *ElTy = AT->getArrayElementType();
+      Value *V = UndefValue::get(AT);
+      auto Count = AT->getNumElements();
+      for (unsigned It = 0; It < Count; It++) {
         V = IRB.CreateInsertValue(V, HandleType(ElTy, nullptr), {It});
       }
       return V;
