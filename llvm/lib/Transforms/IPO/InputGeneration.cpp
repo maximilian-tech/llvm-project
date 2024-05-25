@@ -466,6 +466,25 @@ void InputGenInstrumenter::instrumentAddress(
         }
         HandleType(ElTy, GEP, V, nullptr);
       }
+    } else if (auto *AT = dyn_cast<ArrayType>(TheType)) {
+      Type *ElTy = AT->getElementType();
+      for (unsigned It = 0; It < AT->getNumElements(); It++) {
+        auto *GEP = IRB.CreateConstGEP2_32(TheType, TheAddr, 0, It);
+        Value *V = nullptr;
+        switch (Access.Kind) {
+        case InterestingMemoryAccess::READ:
+          assert(TheValue == nullptr);
+          break;
+        case InterestingMemoryAccess::WRITE:
+          assert(TheValue != nullptr);
+          V = IRB.CreateExtractValue(TheValue, {It});
+          break;
+        case InterestingMemoryAccess::READ_THEN_WRITE:
+          // Unimplemented, but we abort() in the runtime
+          break;
+        }
+        HandleType(ElTy, GEP, V, nullptr);
+      }
     } else if (auto *VT = dyn_cast<VectorType>(TheType)) {
       Type *ElTy = VT->getElementType();
       if (!VT->getElementCount().isScalable()) {
