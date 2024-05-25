@@ -1,6 +1,6 @@
 ; RUN: mkdir -p %t/function-wise/
 ;
-; RUN: (input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function test && INPUT_GEN_ENABLE_PTR_CMP_RETRY=1 %t/function-wise/input-gen.function.test.generate.a.out %t/function-wise/ 0 1) | FileCheck %s --check-prefix=GGENN
+; RUN: (input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function test && %t/function-wise/input-gen.function.test.generate.a.out %t/function-wise/ 0 1) | FileCheck %s --check-prefix=GGENN
 ; RUN: %t/function-wise/input-gen.function.test.run.a.out %t/function-wise/input-gen.function.test.generate.a.out.input.0.bin | FileCheck %s --check-prefix=RRUNN
 ; XFAIL: *
 ;
@@ -9,7 +9,13 @@
 ;
 ;
 ; This test tricks the input generation to make b == &a and then checks if the
-; address to the global is properly relocated
+; pointer to the global is properly relocated from the obj input memory to the
+; global memory.
+;
+; TODO Currently unsupported. We would need to have a callback after all of the
+; __inputrun_global's to then re-re-locate the pointers to globals again. This
+; is probably very rare as we would have needed to generate an offset to a
+; global as a pointer for an input.
 ;
 ; int a;
 ; int *b;
