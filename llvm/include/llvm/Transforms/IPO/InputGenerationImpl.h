@@ -137,6 +137,24 @@ public:
   void createRunEntryPoint(Function &F, bool UniqName);
   void createGlobalCalls(Module &M, IRBuilder<> &IRB);
   void stubDeclaration(Module &M, Function &F);
+
+  struct ABIAttrs {
+    Type *StructRet;
+    Type *InAlloca;
+    Type *ByVal;
+    bool SwiftSelf;
+    // TODO: Add the rest
+    // Type *ByRef;
+    bool operator==(ABIAttrs const &Other) const {
+      return StructRet == Other.StructRet && InAlloca == Other.InAlloca &&
+             ByVal == Other.ByVal && SwiftSelf == Other.SwiftSelf;
+    }
+  };
+  void collectABIInfo(CallBase &CB, SmallVector<ABIAttrs> &ABIInfo);
+  void collectABIInfo(Function &F, SmallVector<ABIAttrs> &ABIInfo);
+  void setABIInfo(CallBase &CB, const SmallVector<ABIAttrs> &ABIInfo);
+  void setABIInfo(Function &F, const SmallVector<ABIAttrs> &ABIInfo);
+
   Function &createFunctionPtrStub(Module &M, CallBase &CB);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
   void removeTokenFunctions(Module &M);
