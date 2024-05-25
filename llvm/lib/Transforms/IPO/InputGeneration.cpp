@@ -866,39 +866,45 @@ void InputGenInstrumenter::collectABIInfo(Function &F,
     ABIInfo.push_back({StructRet, InAlloca, ByVal, SwiftSelf});
   }
 }
-void InputGenInstrumenter::setABIInfo(CallBase &CB,
-                                      const SmallVector<ABIAttrs> &ABIInfo) {
-  auto &Ctx = CB.getContext();
+template <typename TY>
+void InputGenInstrumenter::setABIInfo(TY &CorF,
+                                      const SmallVector<ABIAttrs> &ABIInfo,
+                                      IRBuilder<> &IRB) {
+  auto DL = M.getDataLayout();
+  auto &Ctx = CorF.getContext();
   int Idx = 0;
   for (auto &ArgInfo : ABIInfo) {
-    if (ArgInfo.StructRet)
-      CB.addParamAttr(Idx,
-                      Attribute::getWithStructRetType(Ctx, ArgInfo.StructRet));
-    if (ArgInfo.InAlloca)
-      CB.addParamAttr(Idx,
-                      Attribute::getWithInAllocaType(Ctx, ArgInfo.InAlloca));
-    if (ArgInfo.ByVal)
-      CB.addParamAttr(Idx, Attribute::getWithByValType(Ctx, ArgInfo.ByVal));
+    Type *Ty = nullptr;
+    if (ArgInfo.StructRet) {
+      CorF.addParamAttr(
+          Idx, Attribute::getWithStructRetType(Ctx, ArgInfo.StructRet));
+      Ty = ArgInfo.StructRet;
+    }
+    if (ArgInfo.InAlloca) {
+      CorF.addParamAttr(Idx,
+                        Attribute::getWithInAllocaType(Ctx, ArgInfo.InAlloca));
+      Ty = ArgInfo.InAlloca;
+    }
+    if (ArgInfo.ByVal) {
+      CorF.addParamAttr(Idx, Attribute::getWithByValType(Ctx, ArgInfo.ByVal));
+      Ty = ArgInfo.ByVal;
+    }
     if (ArgInfo.SwiftSelf)
-      CB.addParamAttr(Idx, Attribute::SwiftSelf);
-    ++Idx;
-  }
-}
-void InputGenInstrumenter::setABIInfo(Function &F,
-                                      const SmallVector<ABIAttrs> &ABIInfo) {
-  auto &Ctx = F.getContext();
-  int Idx = 0;
-  for (auto &ArgInfo : ABIInfo) {
-    if (ArgInfo.StructRet)
-      F.addParamAttr(Idx,
-                     Attribute::getWithStructRetType(Ctx, ArgInfo.StructRet));
-    if (ArgInfo.InAlloca)
-      F.addParamAttr(Idx,
-                     Attribute::getWithInAllocaType(Ctx, ArgInfo.InAlloca));
-    if (ArgInfo.ByVal)
-      F.addParamAttr(Idx, Attribute::getWithByValType(Ctx, ArgInfo.ByVal));
-    if (ArgInfo.SwiftSelf)
-      F.addParamAttr(Idx, Attribute::SwiftSelf);
+      CorF.addParamAttr(Idx, Attribute::SwiftSelf);
+    if (Ty && Mode == IGInstrumentationModeTy::IG_Generate) {
+      Value *Addr = nullptr;
+      if constexpr (std::is_same<TY, Function>::value) {
+        Addr = CorF.getArg(Idx);
+      } else if constexpr (std::is_same<TY, CallInst>::value) {
+        Addr = CorF.getArgOperand(Idx);
+      } else {
+        llvm_unreachable("Unhandled type");
+      }
+      InterestingMemoryAccess IMA = {
+          &*IRB.GetInsertPoint(),       Addr, Ty, nullptr, nullptr,
+          InterestingMemoryAccess::READ};
+      instrumentMop(IMA, DL);
+    }
     ++Idx;
   }
 }
@@ -923,8 +929,9 @@ Function &InputGenInstrumenter::createFunctionPtrStub(Module &M, CallBase &CB) {
       FT, GlobalValue::WeakAnyLinkage,
       "__inputgen_fpstub_" + std::to_string(StubNameCounter++), M);
   F->setCallingConv(CB.getCallingConv());
-  setABIInfo(*F, ABIInfo);
   stubDeclaration(M, *F);
+  IRBuilder<> IRB(&F->getEntryBlock());
+  setABIInfo(*F, ABIInfo, IRB);
   return *F;
 }
 
@@ -1875,7 +1882,8 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
   SmallVector<ABIAttrs> FnABIInfo;
   collectABIInfo(F, FnABIInfo);
   Ret->setCallingConv(F.getCallingConv());
-  setABIInfo(*Ret, FnABIInfo);
+  IRBuilder<> IRB2(Ret);
+  setABIInfo(*Ret, FnABIInfo, IRB2);
 
   if (Ret->getType()->isVoidTy())
     return;
@@ -1994,7 +2002,8 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
   SmallVector<ABIAttrs> FnABIInfo;
   collectABIInfo(F, FnABIInfo);
   Ret->setCallingConv(F.getCallingConv());
-  setABIInfo(*Ret, FnABIInfo);
+  IRBuilder<> IRB2(Ret);
+  setABIInfo(*Ret, FnABIInfo, IRB2);
 
   if (Ret->getType()->isVoidTy())
     return;

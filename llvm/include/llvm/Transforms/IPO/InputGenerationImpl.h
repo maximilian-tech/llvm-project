@@ -152,8 +152,9 @@ public:
   };
   void collectABIInfo(CallBase &CB, SmallVector<ABIAttrs> &ABIInfo);
   void collectABIInfo(Function &F, SmallVector<ABIAttrs> &ABIInfo);
-  void setABIInfo(CallBase &CB, const SmallVector<ABIAttrs> &ABIInfo);
-  void setABIInfo(Function &F, const SmallVector<ABIAttrs> &ABIInfo);
+  template <typename TY>
+  void setABIInfo(TY &CorF, const SmallVector<ABIAttrs> &ABIInfo,
+                  IRBuilder<> &IRB);
 
   Function &createFunctionPtrStub(Module &M, CallBase &CB);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
