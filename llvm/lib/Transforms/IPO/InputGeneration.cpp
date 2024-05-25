@@ -1061,9 +1061,14 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
         // Initialize with empty list
         auto &CBList = CallCandidates[&CB];
         if (CB.getFunctionType() == Callee.getFunctionType() &&
-            CB.getFunction() != &Callee)
-          CBList.insert(&Callee);
-        else
+            CB.getFunction() != &Callee) {
+          SmallVector<ABIAttrs> CBABIInfo, FnABIInfo;
+          collectABIInfo(Callee, FnABIInfo);
+          collectABIInfo(CB, CBABIInfo);
+          if (CBABIInfo == FnABIInfo)
+            CBList.insert(&Callee);
+          return false;
+        }
           LLVM_DEBUG(dbgs() << "ignoring\n");
         return false;
       };
