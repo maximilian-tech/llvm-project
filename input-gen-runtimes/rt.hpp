@@ -67,6 +67,8 @@ struct ObjectAddressing {
                                        reinterpret_cast<intptr_t>(PtrInObj));
   }
 
+  VoidPtrTy getLowestObjPtr() const { return nullptr; }
+
   intptr_t PtrInObjMask;
   intptr_t ObjIdxMask;
   uintptr_t MaxObjectSize;

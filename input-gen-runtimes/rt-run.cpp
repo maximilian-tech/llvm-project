@@ -31,7 +31,12 @@ static unsigned NumStubs;
 static VoidPtrTy StubsMemory = nullptr;
 static unsigned CurStub = 0;
 
-static std::vector<ObjectTy> Globals;
+struct GlobalTy {
+  VoidPtrTy Ptr;
+  VoidPtrTy InputStart;
+  uintptr_t InputSize;
+};
+static std::vector<GlobalTy> Globals;
 static size_t CurGlobal = 0;
 
 static std::vector<intptr_t> FunctionPtrs;
@@ -62,12 +67,15 @@ void __inputrun_unreachable(int32_t No, const char *Name) {
 void __inputrun_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,
                        int32_t GlobalSize) {
   assert(Globals.size() > CurGlobal);
-  ObjectTy Obj = Globals[CurGlobal];
-  // We cannot access globals with negative offsets
-  assert(Obj.InputOffset >= 0);
-  assert(Obj.InputSize <= GlobalSize);
-  memcpy(Global + Obj.InputOffset,
-         Obj.Start - Obj.OutputOffset + Obj.InputOffset, Obj.InputSize);
+  auto G = Globals[CurGlobal];
+  assert(G.Ptr <= G.InputStart &&
+         G.InputStart + G.InputSize <= G.Ptr + GlobalSize);
+  intptr_t Offset = G.InputStart - G.Ptr;
+  assert(Offset >= 0);
+  memcpy(Global + Offset, G.InputStart, G.InputSize);
+  INPUTGEN_DEBUG(printf("G #%lu at %p Copying input from %p size %zu\n",
+                        CurGlobal, (void *)Global, (void *)G.InputStart,
+                        G.InputSize));
   CurGlobal++;
 }
 
@@ -202,16 +210,6 @@ int main(int argc, char **argv) {
     Input.read(ccast(ObjStart - OutputOffset + InputOffset), InputSize);
   }
 
-  auto NumGlobals = readV<uint32_t>(Input);
-  INPUTGEN_DEBUG(printf("NG %u\n", NumGlobals));
-  for (uint32_t I = 0; I < NumGlobals; I++) {
-    auto ObjIdx = readV<uint32_t>(Input);
-    assert(ObjIdx < NumObjects);
-    auto Obj = Objects[ObjIdx];
-    Globals.push_back(Obj);
-    INPUTGEN_DEBUG(printf("G #%u -> #%u\n", I, ObjIdx));
-  }
-
   auto RelocatePointer = [&](VoidPtrTy *PtrLoc, const char *Type) {
     INPUTGEN_DEBUG(printf("Reading pointer from %p\n", (void *)PtrLoc));
     VoidPtrTy GlobalPtr = *PtrLoc;
@@ -228,6 +226,19 @@ int main(int argc, char **argv) {
     INPUTGEN_DEBUG(printf("Relocate %s %p -> %p\n", Type, (void *)GlobalPtr,
                           (void *)RealPtr));
   };
+
+  auto NumGlobals = readV<uint32_t>(Input);
+  INPUTGEN_DEBUG(printf("NG %u\n", NumGlobals));
+  for (uint32_t I = 0; I < NumGlobals; I++) {
+    VoidPtrTy Ptr = readV<VoidPtrTy>(Input);
+    VoidPtrTy InputStart = readV<VoidPtrTy>(Input);
+    uintptr_t InputSize = readV<uintptr_t>(Input);
+    RelocatePointer(&Ptr, "Global Start");
+    RelocatePointer(&InputStart, "Global Input");
+    Globals.push_back({Ptr, InputStart, InputSize});
+    INPUTGEN_DEBUG(printf("G #%u -> #%p input start %p size %zu\n", I,
+                          (void *)Ptr, (void *)InputStart, InputSize));
+  }
 
   for (uint32_t I = 0; I < NumObjects; I++) {
     [[maybe_unused]] auto Idx = readV<uintptr_t>(Input);

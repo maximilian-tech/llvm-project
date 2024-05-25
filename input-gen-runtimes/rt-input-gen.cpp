@@ -106,11 +106,15 @@ static VoidPtrTy advance(VoidPtrTy Ptr, uint64_t Bytes) {
 
 struct ObjectTy {
   const ObjectAddressing &OA;
-  ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output)
-      : OA(OA), Idx(Idx) {
+  ObjectTy(size_t Idx, const ObjectAddressing &OA, VoidPtrTy Output,
+           bool KnownSizeObjBundle = false)
+      : OA(OA), KnownSizeObjBundle(KnownSizeObjBundle), Idx(Idx) {
     this->Output.Memory = Output;
     this->Output.AllocationSize = OA.MaxObjectSize;
     this->Output.AllocationOffset = OA.getOffsetFromObjBasePtr(nullptr);
+
+    if (KnownSizeObjBundle)
+      CurrentStaticObjEnd = OA.getObjBasePtr();
   }
   ~ObjectTy() {}
 
@@ -123,6 +127,40 @@ struct ObjectTy {
     intptr_t CmpSize;
     intptr_t CmpOffset;
   };
+
+  bool KnownSizeObjBundle;
+  VoidPtrTy CurrentStaticObjEnd;
+
+  VoidPtrTy addKnownSizeObject(uintptr_t Size) {
+    assert(KnownSizeObjBundle);
+    // Make sure zero-sized objects have their own address
+    if (Size == 0)
+      Size = 1;
+    if (Size + CurrentStaticObjEnd > OA.getLowestObjPtr() + OA.MaxObjectSize)
+      return nullptr;
+    VoidPtrTy ObjPtr = CurrentStaticObjEnd;
+    CurrentStaticObjEnd = alignEnd(CurrentStaticObjEnd + Size, ObjAlignment);
+    return ObjPtr;
+  }
+
+  struct KnownSizeObjInputMem {
+    VoidPtrTy Start;
+    uintptr_t Size;
+  };
+  KnownSizeObjInputMem getKnownSizeObjectInputMemory(VoidPtrTy LocalPtr,
+                                                     uintptr_t Size) {
+    assert(KnownSizeObjBundle);
+    KnownSizeObjInputMem Mem;
+    Mem.Start = std::min(
+        LocalPtr + Size,
+        std::max(LocalPtr, OA.getObjBasePtr() + InputLimits.LowestOffset));
+    VoidPtrTy End = std::max(
+        LocalPtr, std::min(LocalPtr + Size,
+                           OA.getObjBasePtr() + InputLimits.HighestOffset));
+    Mem.Size = End - Mem.Start;
+    assert(Mem.Start <= End);
+    return Mem;
+  }
 
   void comparedAt(VoidPtrTy Ptr) {
     intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
@@ -422,15 +460,33 @@ struct InputGenRTTy {
   AlignedAllocation OutputMem;
   ObjectAddressing OA;
 
+  struct GlobalTy {
+    VoidPtrTy Ptr;
+    size_t ObjIdx;
+    uintptr_t Size;
+  };
+  std::vector<GlobalTy> Globals;
+  std::vector<intptr_t> FunctionPtrs;
+
+  uint64_t NumNewValues = 0;
+
+  std::vector<GenValTy> GenVals;
+  uint32_t NumArgs = 0;
+
+  // Storage for dynamic objects
+  std::vector<std::unique_ptr<ObjectTy>> Objects;
+  std::vector<size_t> GlobalBundleObjects;
+
   int rand() { return Rand(Gen); }
 
   struct NewObj {
     size_t Idx;
     VoidPtrTy Ptr;
   };
+  static constexpr size_t NullPtrIdx = -1;
+  static constexpr uint64_t UnknownSize = -1;
   NewObj getNewPtr(uint64_t Size) {
     size_t Idx = Objects.size();
-    size_t NullPtrIdx = -1;
     for (auto &ObjCmp : ObjCmps) {
       if (ObjCmp.Done)
         continue;
@@ -462,10 +518,28 @@ struct InputGenRTTy {
     return {Idx, OutputPtr};
   }
 
+  NewObj getNewGlobal(uint64_t Size) {
+    assert(Size != UnknownSize);
+    for (size_t GlobalBundleIdx : GlobalBundleObjects) {
+      auto &Obj = Objects[GlobalBundleIdx];
+      if (VoidPtrTy LocalPtr = Obj->addKnownSizeObject(Size))
+        return {GlobalBundleIdx,
+                OA.localPtrToGlobalPtr(GlobalBundleIdx + OutputObjIdxOffset,
+                                       LocalPtr)};
+    }
+    size_t Idx = Objects.size();
+    Objects.push_back(std::make_unique<ObjectTy>(
+        Idx, OA, OutputMem.AlignedMemory + Idx * OA.MaxObjectSize,
+        /*KnownSizeObjBundle=*/true));
+    VoidPtrTy LocalPtr = Objects.back()->addKnownSizeObject(Size);
+    GlobalBundleObjects.push_back(Idx);
+    return {Idx, OA.localPtrToGlobalPtr(Idx + OutputObjIdxOffset, LocalPtr)};
+  }
+
   size_t getObjIdx(VoidPtrTy GlobalPtr, bool AllowNull = false) {
     assert(AllowNull || GlobalPtr);
     if (GlobalPtr == nullptr)
-      return -1;
+      return NullPtrIdx;
     size_t Idx = OA.globalPtrToObjIdx(GlobalPtr) - OutputObjIdxOffset;
     return Idx;
   }
@@ -513,8 +587,10 @@ struct InputGenRTTy {
                              << (void *)B << " (#" << IdxB << ") "
                              << std::endl);
     // Globals cannot alias
-    if (std::find(Globals.begin(), Globals.end(), IdxA) != Globals.end() &&
-        std::find(Globals.begin(), Globals.end(), IdxB) != Globals.end()) {
+    if (std::find(GlobalBundleObjects.begin(), GlobalBundleObjects.end(),
+                  IdxA) != GlobalBundleObjects.end() &&
+        std::find(GlobalBundleObjects.begin(), GlobalBundleObjects.end(),
+                  IdxB) != GlobalBundleObjects.end()) {
       INPUTGEN_DEBUG(std::cerr << "Compared globals, ignoring." << std::endl);
       return;
     }
@@ -738,7 +814,7 @@ struct InputGenRTTy {
     NumNewValues++;
     // We let the ptr cmp retry handle null pointers if it is enabled
     if (InputGenConf.EnablePtrCmpRetry || (rand() % NullPtrProbability)) {
-      auto Obj = getNewPtr(0);
+      auto Obj = getNewPtr(UnknownSize);
       INPUTGEN_DEBUG(printf("New ptr: Obj #%lu at output ptr %p\n", Obj.Idx,
                             (void *)Obj.Ptr));
       return Obj.Ptr;
@@ -770,13 +846,12 @@ struct InputGenRTTy {
     return *reinterpret_cast<T *>(Ptr);
   }
 
-  void registerGlobal(VoidPtrTy Global, VoidPtrTy *ReplGlobal,
-                      int32_t GlobalSize) {
-    auto Obj = getNewPtr(GlobalSize);
-    Globals.push_back(Obj.Idx);
-    *ReplGlobal = Obj.Ptr;
+  void registerGlobal(VoidPtrTy, VoidPtrTy *ReplGlobal, int32_t GlobalSize) {
+    auto Global = getNewGlobal(GlobalSize);
+    Globals.push_back({Global.Ptr, Global.Idx, (uintptr_t)GlobalSize});
+    *ReplGlobal = Global.Ptr;
     INPUTGEN_DEBUG(printf("Global %p replaced with Obj %zu @ %p\n",
-                          (void *)Global, Obj.Idx, (void *)ReplGlobal));
+                          (void *)ReplGlobal, Global.Idx, (void *)Global.Ptr));
   }
 
   void registerFunctionPtrAccess(VoidPtrTy Ptr, uint32_t Size,
@@ -803,18 +878,6 @@ struct InputGenRTTy {
     FunctionPtrs.push_back(Offset);
     return Offset;
   }
-
-  std::vector<size_t> Globals;
-  std::vector<intptr_t> FunctionPtrs;
-
-  uint64_t NumNewValues = 0;
-
-  std::vector<GenValTy> GenVals;
-  uint32_t NumArgs = 0;
-
-  // Storage for dynamic objects, TODO maybe we should introduce a static size
-  // object type for when we know the size from static analysis.
-  std::vector<std::unique_ptr<ObjectTy>> Objects;
 
   void report() {
     if (OutputDir == "-") {
@@ -892,8 +955,16 @@ struct InputGenRTTy {
     INPUTGEN_DEBUG(printf("Num Glob %u\n", NumGlobals));
 
     for (uint32_t I = 0; I < NumGlobals; ++I) {
-      writeV<uint32_t>(InputOut, Globals[I]);
-      INPUTGEN_DEBUG(printf("Glob %u %lu\n", I, Globals[I]));
+      auto InputMem = Objects[Globals[I].ObjIdx]->getKnownSizeObjectInputMemory(
+          OA.globalPtrToLocalPtr(Globals[I].Ptr), Globals[I].Size);
+      VoidPtrTy InputStart = OA.localPtrToGlobalPtr(
+          Globals[I].ObjIdx + OutputObjIdxOffset, InputMem.Start);
+      writeV<VoidPtrTy>(InputOut, Globals[I].Ptr);
+      writeV<VoidPtrTy>(InputOut, InputStart);
+      writeV<uintptr_t>(InputOut, InputMem.Size);
+      INPUTGEN_DEBUG(printf("Glob %u %p in Obj #%zu input start %p size %zu\n",
+                            I, (void *)Globals[I].Ptr, Globals[I].ObjIdx,
+                            (void *)InputStart, InputMem.Size));
     }
 
     I = 0;
