@@ -1756,7 +1756,7 @@ AllocaInst *createSwiftErrorAlloca(IRBuilderBase &IRB) {
 void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
                                                       bool UniqName) {
   Module &M = *F.getParent();
-  F.setLinkage(GlobalValue::PrivateLinkage);
+  F.setLinkage(GlobalValue::InternalLinkage);
 
   std::string EntryPointName = getCallbackPrefix(Mode) + "entry";
   if (UniqName) {
