@@ -135,7 +135,8 @@ struct ObjectTy {
     // in input-gen and input-run as we would compare against an offset in a
     // different object
     if (!OutputLimits.isEmpty()) {
-      OutputLimits.update(CmpLimits.LowestOffset, CmpLimits.getSize());
+      if (!CmpLimits.isEmpty())
+        OutputLimits.update(CmpLimits.LowestOffset, CmpLimits.getSize());
       // We no longer need the CmpLimits, reset it
       CmpLimits = Limits();
     }
