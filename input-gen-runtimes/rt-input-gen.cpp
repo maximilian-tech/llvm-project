@@ -375,8 +375,8 @@ struct InputGenConfTy {
   bool EnablePtrCmpRetry;
   bool EnableBranchHints;
   InputGenConfTy() {
-    EnablePtrCmpRetry = getenv("INPUT_GEN_ENABLE_PTR_CMP_RETRY");
-    EnableBranchHints = getenv("INPUT_GEN_ENABLE_BRANCH_HINTS");
+    EnablePtrCmpRetry = !getenv("INPUT_GEN_DISABLE_PTR_CMP_RETRY");
+    EnableBranchHints = !getenv("INPUT_GEN_DISABLE_BRANCH_HINTS");
   }
 };
 

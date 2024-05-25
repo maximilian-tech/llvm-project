@@ -1,7 +1,7 @@
 ; RUN: mkdir -p %t
 ; RUN: mkdir -p %t/function-wise/
 ;
-; RUN: (input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0 && LLVM_PROFILE_FILE=%t/const_stub.prof VERBOSE=1 %t/input-gen.module.run.a.out %t/input-gen.module.generate.a.out.input.0.0.bin --name const_stub && llvm-profdata merge -o %t/const_stub.prof.merged %t/const_stub.prof && input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile --profile-path %t/const_stub.prof.merged -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0 && LLVM_PROFILE_FILE=%t/const_stub.prof2 VERBOSE=1 %t/input-gen.module.run.a.out %t/input-gen.module.generate.a.out.input.0.0.bin --name const_stub && llvm-profdata merge -o %t/const_stub.prof.merged %t/const_stub.prof %t/const_stub.prof2 && input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile --profile-path %t/const_stub.prof.merged -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0) | FileCheck %s --check-prefix=COVERAGE
+; RUN: (input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0 && LLVM_PROFILE_FILE=%t/const_stub.prof VERBOSE=1 %t/input-gen.module.run.a.out %t/input-gen.module.generate.a.out.input.0.0.bin --name const_stub && llvm-profdata merge -o %t/const_stub.prof.merged %t/const_stub.prof && input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile --profile-path %t/const_stub.prof.merged -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0 && LLVM_PROFILE_FILE=%t/const_stub.prof2 VERBOSE=1 %t/input-gen.module.run.a.out %t/input-gen.module.generate.a.out.input.0.0.bin --name const_stub && llvm-profdata merge -o %t/const_stub.prof.merged %t/const_stub.prof %t/const_stub.prof2 && input-gen --instrumented-module-for-coverage --profiling-runtime-path=%libclang_rt_profile --profile-path %t/const_stub.prof.merged -g --verify --output-dir %t/ --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s && VERBOSE=1 %t/input-gen.module.generate.a.out %t/ 0 1 --name const_stub 0) | FileCheck %s --check-prefix=COVERAGE
 ;
 ; COVERAGE-DAG: GREATER
 ; COVERAGE-DAG: EQUAL
@@ -13,7 +13,7 @@
 ;
 ;
 ; RUN: input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function const_load
-; RUN: VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/function-wise/input-gen.function.const_load.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_LOAD
+; RUN: VERBOSE=1 %t/function-wise/input-gen.function.const_load.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_LOAD
 ;
 ; CONST_LOAD: Access: {{.*}} Obj #0
 ; CONST_LOAD-DAG: BranchHint Kind 1 Signed 1 Frequency {{.*}} Val 1024
@@ -23,7 +23,7 @@
 ;
 ;
 ; RUN: input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function const_arg
-; RUN: VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/function-wise/input-gen.function.const_arg.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_ARG
+; RUN: VERBOSE=1 %t/function-wise/input-gen.function.const_arg.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_ARG
 ;
 ; CONST_ARG-DAG: BranchHint Kind 1 Signed 1 Frequency {{.*}} Val 256
 ; CONST_ARG-DAG: BranchHint Kind 2 Signed 1 Frequency {{.*}} Val 256
@@ -32,7 +32,7 @@
 ;
 ;
 ; RUN: input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function const_stub
-; RUN: VERBOSE=1 INPUT_GEN_ENABLE_BRANCH_HINTS=1 %t/function-wise/input-gen.function.const_stub.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_STUB
+; RUN: VERBOSE=1 %t/function-wise/input-gen.function.const_stub.generate.a.out %t/function-wise/ 0 1 2>&1 | FileCheck %s --check-prefix=CONST_STUB
 ;
 ; CONST_STUB-DAG: BranchHint Kind 1 Signed 1 Frequency {{.*}} Val 512
 ; CONST_STUB-DAG: BranchHint Kind 2 Signed 1 Frequency {{.*}} Val 512

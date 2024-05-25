@@ -1,9 +1,7 @@
 ; RUN: mkdir -p %t
 ; RUN: input-gen -g --verify --output-dir %t --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
 ; RUN: %S/run_all.sh %t
-;
-; RUN: input-gen -g --verify --output-dir %t --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s
-; RUN: INPUT_GEN_ENABLE_PTR_CMP_RETRY=1 %S/run_all.sh %t
+; RUN: INPUT_GEN_DISABLE_PTR_CMP_RETRY=1 %S/run_all.sh %t
 ;
 
 source_filename = "linked_list.c"

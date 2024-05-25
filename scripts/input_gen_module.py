@@ -321,11 +321,11 @@ class InputGenModule:
                     self.print('ig args generation:', ' '.join(iggenargs))
                     env = os.environ.copy()
                     if branch_hints:
-                        env['INPUT_GEN_ENABLE_BRANCH_HINTS'] = '1'
-                    else:
                         env = os.environ.copy()
-                        if 'INPUT_GEN_ENABLE_BRANCH_HINTS' in env:
-                            del env['INPUT_GEN_ENABLE_BRANCH_HINTS']
+                        if 'INPUT_GEN_DISABLE_BRANCH_HINTS' in env:
+                            del env['INPUT_GEN_DISABLE_BRANCH_HINTS']
+                    else:
+                        env['INPUT_GEN_DISABLE_BRANCH_HINTS'] = '1'
                     proc = subprocess.Popen(
                         iggenargs,
                         stdout=self.get_stdout(),

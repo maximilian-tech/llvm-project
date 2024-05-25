@@ -11,6 +11,7 @@ LLVM_INSTALL_DIR="/usr/WS1/$USER/opt/input-gen-release"
 JUGDIR="$SCRIPT_DIR/jugfile.jugdata"
 OUTDIR="/p/vast1/doerfert/llvm-project/compile-input-gen-out/"
 LLVM_INSTALL_DIR="/p/vast1/doerfert/install"
+INPUT_GEN_NUM=1
 ### Default values
 
 # User provided configuration
@@ -53,11 +54,11 @@ if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
 
-#if [ "$INPUT_GEN_ENABLE_BRANCH_HINTS" != "" ]; then
-#    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --branch-hints"
-#fi
+if [ "$INPUT_GEN_DISABLE_BRANCH_HINTS" != "" ]; then
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --branch-hints"
+fi
 
-if [ "$INPUT_GEN_ENABLE_FUNC_PTR" ==  "" ]; then
+if [ "$INPUT_GEN_DISABLE_FUNC_PTR" ==  "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --disable-fp-handling"
 fi
 
@@ -79,13 +80,12 @@ function run() {
         --precompile-rts \
         --input-gen-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-input-gen.cpp")" \
         --input-run-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-run.cpp")" \
-        --input-gen-num 1 \
+        --input-gen-num "$INPUT_GEN_NUM" \
         --input-gen-timeout 5 \
         --input-run-timeout 5 \
         --num-procs="$NUM_CPU" \
+        --coverage-statistics \
+        --coverage-runtime "$(readlink -f "$LLVM_INSTALL_DIR/lib/clang/19/lib/x86_64-unknown-linux-gnu/libclang_rt.profile.a")" \
         $ADDITIONAL_FLAGS
-
-        #--coverage-statistics \
-        #--coverage-runtime "$(readlink -f "$LLVM_INSTALL_DIR/lib/clang/19/lib/x86_64-unknown-linux-gnu/libclang_rt.profile.a")" \
 }
 run
