@@ -53,6 +53,7 @@
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/Support/BLAKE3.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -68,6 +69,7 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 using namespace llvm;
@@ -248,6 +250,8 @@ InputGenInstrumenter::isInterestingMemoryAccess(Instruction *I) const {
     return Access;
 
   if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+    if (IndirectionGlobalLoads.count(LI))
+      return std::nullopt;
     Access.Kind = InterestingMemoryAccess::READ;
     Access.AccessTy = LI->getType();
     Access.Addr = LI->getPointerOperand();
@@ -441,8 +445,9 @@ void InputGenInstrumenter::instrumentAddress(
   IRB.SetCurrentDebugLocation(Access.I->getDebugLoc());
 
   Value *Object = igGetUnderlyingObject(Access.Addr);
-  if (isa<AllocaInst>(Object))
+  if (isa_and_present<AllocaInst>(Object))
     return;
+  assert(!IndirectionGlobalLoads.count(Access.I));
 
   std::function<void(Type *, Value *, Value *, Value *)> HandleType;
   HandleType = [&](Type *TheType, Value *TheAddr, Value *TheValue,
@@ -1226,7 +1231,7 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
       GV.setLinkage(GlobalValue::ExternalWeakLinkage);
       continue;
     }
-    if (GV.hasExternalLinkage() || !GV.isConstant())
+    if (!GV.isConstant())
       MaybeExtInitializedGlobals.push_back({&GV, nullptr});
     if (!GV.hasExternalLinkage())
       continue;
@@ -1255,10 +1260,12 @@ void InputGenInstrumenter::provideGlobals(Module &M) {
     for (auto &U : make_pointee_range(InstUses)) {
       Instruction *UserI = cast<Instruction>(U.getUser());
       Value *&ReplVal = FnMap[UserI->getFunction()];
-      if (!ReplVal)
+      if (!ReplVal) {
         ReplVal = new LoadInst(
             GV.getType(), &GVPtr, GV.getName() + ".reload",
             UserI->getFunction()->getEntryBlock().getFirstInsertionPt());
+        IndirectionGlobalLoads.insert(ReplVal);
+      }
       U.set(ReplVal);
     }
   }

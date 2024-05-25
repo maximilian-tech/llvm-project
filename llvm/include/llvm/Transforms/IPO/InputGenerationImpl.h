@@ -146,6 +146,7 @@ public:
   void provideGlobals(Module &M);
   SetVector<Function *> pruneModule(Function &F);
 
+  SmallPtrSet<Value *, 32> IndirectionGlobalLoads;
   SmallVector<std::pair<GlobalVariable *, GlobalVariable *>>
       MaybeExtInitializedGlobals;
 
