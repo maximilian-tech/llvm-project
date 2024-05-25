@@ -69,6 +69,7 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -942,6 +943,8 @@ void InputGenInstrumenter::stubDeclaration(Module &M, Function &F) {
                                               nullptr, nullptr));
 
   if (RTy->isVoidTy())
+    return;
+  if (!ClProvideBranchHints)
     return;
 
   // To generate branch hints we need to generate the value at the call site

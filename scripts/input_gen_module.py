@@ -248,6 +248,7 @@ class InputGenModule:
                 self.ig_instrument_args.append(profdata_filename)
             if self.disable_fp_handling:
                 self.ig_instrument_args.append("--input-gen-instrument-function-ptrs=false")
+            self.ig_instrument_args.append("--input-gen-provide-branch-hints=%s" %  ("true" if self.branch_hints else "false"))
 
             self.print("input-gen args:", " ".join(self.ig_instrument_args))
             subprocess.run(self.ig_instrument_args,
