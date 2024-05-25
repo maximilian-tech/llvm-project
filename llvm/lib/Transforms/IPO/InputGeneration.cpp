@@ -67,6 +67,7 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -844,15 +845,58 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
       M.getOrInsertFunction(Prefix + "unreachable", VoidTy, Int32Ty, PtrTy);
 }
 
-Function &InputGenInstrumenter::createFunctionPtrStub(Module &M, FunctionType &FT) {
+Function &InputGenInstrumenter::createFunctionPtrStub(Module &M, CallBase &CB) {
+  auto *FT = CB.getFunctionType();
+  struct ABIAttrs {
+    Type *StructRet;
+    Type *InAlloca;
+    Type *ByVal;
+    bool SwiftSelf;
+    // TODO: Add the rest
+    // Type *ByRef;
+  };
+  SmallVector<ABIAttrs> ArgInfos;
+  for (unsigned I = 0; I < CB.arg_size(); ++I) {
+    Type *StructRet = CB.getParamStructRetType(I);
+    Type *InAlloca = CB.getParamInAllocaType(I);
+    Type *ByVal = CB.getParamByValType(I);
+    bool SwiftSelf = CB.getParamAttr(I, Attribute::SwiftSelf).isValid();
+    ArgInfos.push_back({StructRet, InAlloca, ByVal, SwiftSelf});
+  }
   auto IsEquivalentStub = [&](Function &F) {
-    return F.getFunctionType() == &FT &&
-           F.getName().starts_with("__inputgen_fpstub_");
+    return F.getFunctionType() == FT &&
+           F.getName().starts_with("__inputgen_fpstub_") &&
+           F.getCallingConv() == CB.getCallingConv() &&
+           llvm::all_of(F.args(), [&](Argument &Arg) {
+             ABIAttrs ArgInfo = ArgInfos[Arg.getArgNo()];
+             return Arg.getParamStructRetType() == ArgInfo.StructRet &&
+                    Arg.getParamInAllocaType() == ArgInfo.InAlloca &&
+                    Arg.hasSwiftSelfAttr() == ArgInfo.SwiftSelf &&
+                    Arg.getParamByValType() == ArgInfo.ByVal;
+           });
+    ;
   };
   if (auto It = find_if(M, IsEquivalentStub); It != M.end())
     return *It;
-  auto *F = Function::Create(&FT, GlobalValue::WeakAnyLinkage,
-                             "__inputgen_fpstub_" + std::to_string(StubNameCounter++), M);
+  auto *F = Function::Create(
+      FT, GlobalValue::WeakAnyLinkage,
+      "__inputgen_fpstub_" + std::to_string(StubNameCounter++), M);
+  F->setCallingConv(CB.getCallingConv());
+  auto &Ctx = F->getContext();
+  int Idx = 0;
+  for (auto &ArgInfo : ArgInfos) {
+    if (ArgInfo.StructRet)
+      F->addParamAttr(Idx,
+                      Attribute::getWithStructRetType(Ctx, ArgInfo.StructRet));
+    if (ArgInfo.InAlloca)
+      F->addParamAttr(Idx,
+                      Attribute::getWithInAllocaType(Ctx, ArgInfo.InAlloca));
+    if (ArgInfo.ByVal)
+      F->addParamAttr(Idx, Attribute::getWithByValType(Ctx, ArgInfo.ByVal));
+    if (ArgInfo.SwiftSelf)
+      F->addParamAttr(Idx, Attribute::SwiftSelf);
+    ++Idx;
+  }
   stubDeclaration(M, *F);
   return *F;
 }
@@ -1027,7 +1071,7 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
       LLVM_DEBUG(dbgs() << "    " << Candidate->getName() << '\n');
     }
 
-    Candidates.insert(&createFunctionPtrStub(M, *Call->getFunctionType()));
+    Candidates.insert(&createFunctionPtrStub(M, *Call));
 
     MDBuilder Builder(F->getContext());
     auto *FilteredCallees = Builder.createCallees(Candidates.getArrayRef());

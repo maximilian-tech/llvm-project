@@ -137,7 +137,7 @@ public:
   void createRunEntryPoint(Function &F, bool UniqName);
   void createGlobalCalls(Module &M, IRBuilder<> &IRB);
   void stubDeclaration(Module &M, Function &F);
-  Function &createFunctionPtrStub(Module &M, FunctionType &FT);
+  Function &createFunctionPtrStub(Module &M, CallBase &CB);
   void stubDeclarations(Module &M, TargetLibraryInfo &TLI);
   void removeTokenFunctions(Module &M);
   void gatherFunctionPtrCallees(Module &M);
