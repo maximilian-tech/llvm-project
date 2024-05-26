@@ -11,7 +11,12 @@ LLVM_INSTALL_DIR="/usr/WS1/$USER/opt/input-gen-release"
 JUGDIR="$SCRIPT_DIR/jugfile.jugdata"
 OUTDIR="/p/vast1/doerfert/llvm-project/compile-input-gen-out/"
 LLVM_INSTALL_DIR="/p/vast1/doerfert/install"
-INPUT_GEN_NUM=1
+INPUT_GEN_NUM=${INPUT_GEN_NUM:=1}
+START=${START:=0}
+END=${END:=7000}
+NUM_CPU=${NUM_CPU:="$(nproc --all)"}
+INPUT_GEN_RUNTIME="${INPUT_GEN_RUNTIME:=$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-input-gen.cpp")}"
+INPUT_RUN_RUNTIME="${INPUT_RUN_RUNTIME:=$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-run.cpp")}"
 ### Default values
 
 # User provided configuration
@@ -24,10 +29,6 @@ if [ "$SINGLE" != "" ]; then
     START="$SINGLE"
     END="$(("$SINGLE" + 1))"
 fi
-
-START=${START:=0}
-END=${END:=7000}
-NUM_CPU=${NUM_CPU:="$(nproc --all)"}
 
 SCRIPT="$SCRIPT_DIR/mass_input_gen.py"
 
@@ -78,8 +79,8 @@ function run() {
         --start "$START" \
         --end "$END" \
         --precompile-rts \
-        --input-gen-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-input-gen.cpp")" \
-        --input-run-runtime "$(readlink -f "$SCRIPT_DIR/../input-gen-runtimes/rt-run.cpp")" \
+        --input-gen-runtime "$INPUT_GEN_RUNTIME" \
+        --input-run-runtime "$INPUT_RUN_RUNTIME" \
         --input-gen-num "$INPUT_GEN_NUM" \
         --input-gen-timeout 5 \
         --input-run-timeout 5 \
