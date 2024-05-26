@@ -38,9 +38,9 @@ class Function:
         self.tried_seeds = []
         self.succeeded_seeds = []
         self.inputs = []
-        self.times = {}
+        self.times = []
         self.generate_profs = generate_profs
-        self.profile_files = {}
+        self.profile_files = []
 
     def get_stderr(self):
         if self.verbose:
@@ -115,10 +115,12 @@ class Function:
         if not succeeded:
             profdatafile = None
             elapsed_time = None
-
-        self.times[inpt] = elapsed_time
+        self.times.append(elapsed_time)
         if self.generate_profs:
-            self.profile_files[inpt] = profdatafile
+            self.profile_files.append(profdatafile)
+        else:
+            self.profile_files.append(None)
+
 
 def my_add(a, b):
     if a is None:
@@ -148,6 +150,8 @@ def get_empty_statistics():
         'num_input_ran_funcs': 0,
         'num_bbs': None,
         'num_bbs_executed': [],
+        'input_generated_by_seed': [],
+        'input_ran_by_seed': [],
     }
     return stats
 
@@ -197,7 +201,7 @@ class InputGenModule:
                     with tempfile.NamedTemporaryFile() as temp_profdata:
                         for j in range(i):
                             for func in self.functions:
-                                prof_file = func.profile_files.get(func.inputs[j])
+                                prof_file = func.profile_files[j]
                                 if prof_file is not None:
                                     self.merge_profdata(temp_profdata.name, prof_file)
                         self.instrument(temp_profdata.name)
@@ -416,17 +420,25 @@ class InputGenModule:
                 stats['num_instrumented_funcs'] += 1
             if len([inpt for inpt in func.inputs if inpt is not None]) != 0:
                 stats['num_input_generated_funcs'] += 1
-            if len([time for time in func.times.values() if time is not None]) != 0:
+            if len([time for time in func.times if time is not None]) != 0:
                 stats['num_input_ran_funcs'] += 1
+            stats['input_generated_by_seed'] = [
+                my_add(0 if inpt is None else 1, num)
+                for inpt, num in zip_longest(func.inputs, stats['input_generated_by_seed'])]
+            stats['input_ran_by_seed'] = [
+                my_add(0 if time is None else 1, num)
+                for time, num in zip_longest(func.times, stats['input_ran_by_seed'])]
 
         if self.instrumentation_failed:
             return
 
+        if not self.coverage_statistics:
+            return
 
         with tempfile.NamedTemporaryFile() as temp_profdata:
             for i in range(self.input_gen_num):
                 for func in self.functions:
-                    prof_file = func.profile_files.get(func.inputs[i])
+                    prof_file = func.profile_files[i]
                     if prof_file is not None:
                         self.merge_profdata(temp_profdata.name, prof_file)
 
