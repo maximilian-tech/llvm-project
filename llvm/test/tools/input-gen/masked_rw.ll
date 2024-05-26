@@ -18,14 +18,14 @@ declare void @llvm.masked.store.v4i32.p0(<4 x i32>, ptr nocapture, i32 immarg, <
 declare <4 x i32> @llvm.masked.load.v4i32.p0(ptr nocapture, i32 immarg, <4 x i1>, <4 x i32>)
 
 
-; LOAD-LABEL: define private <4 x i32> @__inputgen_renamed_load(
-; LOAD-SAME: ptr nocapture noundef readonly [[P:%.*]], <4 x i1> [[MASK:%.*]], <4 x i32> [[PT:%.*]]) local_unnamed_addr #[[ATTR0:[0-9]+]] {
+; LOAD-LABEL: @__inputgen_renamed_load(
+; LOAD-SAME: ptr nocapture noundef readonly [[P:%.*]], <4 x i1> [[MASK:%.*]], <4 x i32> [[PT:%.*]])
 ; LOAD-NEXT:  entry:
 ; LOAD-NEXT:    [[TMP0:%.*]] = extractelement <4 x i1> [[MASK]], i64 0
 ; LOAD-NEXT:    [[TMP1:%.*]] = extractelement <4 x i1> [[MASK]], i64 1
 ; LOAD-NEXT:    [[TMP2:%.*]] = extractelement <4 x i1> [[MASK]], i64 2
 ; LOAD-NEXT:    [[TMP3:%.*]] = extractelement <4 x i1> [[MASK]], i64 3
-; LOAD-NEXT:    [[A:%.*]] = call <4 x i32> @llvm.masked.load.v4i32.p0(ptr nocapture readonly [[P]], i32 1, <4 x i1> [[MASK]], <4 x i32> [[PT]]) #[[ATTR5:[0-9]+]]
+; LOAD-NEXT:    [[A:%.*]] = call <4 x i32> @llvm.masked.load.v4i32.p0(ptr nocapture readonly [[P]], i32 1, <4 x i1> [[MASK]], <4 x i32> [[PT]])
 ; LOAD-NEXT:    br i1 [[TMP3]], label [[TMP4:%.*]], label [[TMP6:%.*]]
 ; LOAD:       4:
 ; LOAD-NEXT:    [[TMP5:%.*]] = getelementptr <4 x i32>, ptr [[P]], i64 3
@@ -52,14 +52,14 @@ declare <4 x i32> @llvm.masked.load.v4i32.p0(ptr nocapture, i32 immarg, <4 x i1>
 ; LOAD:       15:
 ; LOAD-NEXT:    ret <4 x i32> [[A]]
 ;
-; STORE-LABEL: define private void @__inputgen_renamed_store(
-; STORE-SAME: ptr nocapture noundef writeonly [[P:%.*]], <4 x i1> [[MASK:%.*]], <4 x i32> [[PT:%.*]]) local_unnamed_addr #[[ATTR1:[0-9]+]] {
+; STORE-LABEL: @__inputgen_renamed_store(
+; STORE-SAME: ptr nocapture noundef writeonly [[P:%.*]], <4 x i1> [[MASK:%.*]], <4 x i32> [[PT:%.*]])
 ; STORE-NEXT:  entry:
 ; STORE-NEXT:    [[TMP0:%.*]] = extractelement <4 x i1> [[MASK]], i64 0
 ; STORE-NEXT:    [[TMP1:%.*]] = extractelement <4 x i1> [[MASK]], i64 1
 ; STORE-NEXT:    [[TMP2:%.*]] = extractelement <4 x i1> [[MASK]], i64 2
 ; STORE-NEXT:    [[TMP3:%.*]] = extractelement <4 x i1> [[MASK]], i64 3
-; STORE-NEXT:    call void @llvm.masked.store.v4i32.p0(<4 x i32> [[PT]], ptr nocapture writeonly [[P]], i32 1, <4 x i1> [[MASK]]) #[[ATTR6:[0-9]+]]
+; STORE-NEXT:    call void @llvm.masked.store.v4i32.p0(<4 x i32> [[PT]], ptr nocapture writeonly [[P]], i32 1, <4 x i1> [[MASK]])
 ; STORE-NEXT:    br i1 [[TMP3]], label [[TMP4:%.*]], label [[TMP8:%.*]]
 ; STORE:       4:
 ; STORE-NEXT:    [[TMP5:%.*]] = getelementptr <4 x i32>, ptr [[P]], i64 3
