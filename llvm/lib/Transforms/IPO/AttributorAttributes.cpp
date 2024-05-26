@@ -12327,7 +12327,8 @@ struct AAIndirectCallInfoCallSite : public AAIndirectCallInfo {
 
     // If we know all callees and there are none, the call site is (effectively)
     // dead (or UB).
-    if (AssumedCallees.empty()) {
+    if (/* TODO Make the callback accept a pointer */ false &&
+        AssumedCallees.empty()) {
       assert(AllCalleesKnown &&
              "Expected all callees to be known if there are none.");
       A.changeToUnreachableAfterManifest(CB);
