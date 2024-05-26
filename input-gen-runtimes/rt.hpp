@@ -24,8 +24,8 @@ static constexpr intptr_t ObjAlignment = 16;
 static constexpr intptr_t MaxPrimitiveTypeSize = 16;
 
 typedef uint8_t *VoidPtrTy;
-typedef struct {}* FunctionPtrTy;
-
+typedef struct {
+} *FunctionPtrTy;
 
 template <typename T> static char *ccast(T *Ptr) {
   return reinterpret_cast<char *>(Ptr);
@@ -82,11 +82,15 @@ struct ObjectAddressing {
     this->Size = Size;
 
     uintptr_t HO = highestOne(Size | 1);
-    uintptr_t BitsForObj = HO * 3 / 4;
+    uintptr_t BitsForObj = HO * 70 / 100;
+    uintptr_t BitsForObjIndexing = HO - BitsForObj;
     MaxObjectSize = 1ULL << BitsForObj;
-    MaxObjectNum = 1ULL << (HO - BitsForObj);
+    MaxObjectNum = 1ULL << (BitsForObjIndexing);
     PtrInObjMask = MaxObjectSize - 1;
     ObjIdxMask = ~(PtrInObjMask);
+    INPUTGEN_DEBUG(std::cerr << "OA " << BitsForObj
+                             << " bits for in-object addressing and "
+                             << BitsForObjIndexing << " for object indexing\n");
   }
 };
 
