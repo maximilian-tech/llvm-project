@@ -61,7 +61,7 @@ extern uint32_t __inputrun_num_function_pointers;
 
 void __inputrun_unreachable(int32_t No, const char *Name) {
   printf("Reached unreachable %i due to '%s'\n", No, Name ? Name : "n/a");
-  exit(0);
+  exit(UnreachableExitStatus);
 }
 
 void __inputrun_global(int32_t NumGlobals, VoidPtrTy Global, void **ReplGlobal,

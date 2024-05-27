@@ -23,6 +23,8 @@ extern int VERBOSE;
 static constexpr intptr_t ObjAlignment = 16;
 static constexpr intptr_t MaxPrimitiveTypeSize = 16;
 
+static constexpr int UnreachableExitStatus = 111;
+
 typedef uint8_t *VoidPtrTy;
 typedef struct {
 } *FunctionPtrTy;

@@ -11,6 +11,8 @@ import copy
 import json
 from itertools import zip_longest
 
+UNREACHABLE_EXIT_STATUS = 111
+
 def add_option_args(parser):
     parser.add_argument('--input-gen-num', type=int, default=5)
     parser.add_argument('--input-gen-timeout', type=int, default=5)
@@ -38,7 +40,9 @@ class Function:
         self.tried_seeds = []
         self.succeeded_seeds = []
         self.inputs = []
+        self.unreachable_exit_inputs = []
         self.times = []
+        self.unreachable_exit_times = []
         self.generate_profs = generate_profs
         self.profile_files = []
 
@@ -66,6 +70,7 @@ class Function:
         self.print('Running executables for', self.input_run_executable)
 
         succeeded = False
+        unreachable_exit = None
         if inpt is not None:
             try:
                 start_time = time.time()
@@ -94,10 +99,11 @@ class Function:
                 end_time = time.time()
                 elapsed_time = end_time - start_time
 
-                if proc.returncode != 0:
-                    self.print('Input run process failed (%i): %s' % (proc.returncode, inpt))
-                else:
+                if proc.returncode == 0 or proc.returncode == UNREACHABLE_EXIT_STATUS:
+                    unreachable_exit = bool(proc.returncode == UNREACHABLE_EXIT_STATUS)
                     succeeded = True
+                else:
+                    self.print('Input run process failed (%i): %s' % (proc.returncode, inpt))
 
             except subprocess.CalledProcessError as e:
                 self.print('Input run process failed: %s' % inpt)
@@ -115,7 +121,9 @@ class Function:
         if not succeeded:
             profdatafile = None
             elapsed_time = None
+            unreachable_exit = None
         self.times.append(elapsed_time)
+        self.unreachable_exit_times.append(unreachable_exit)
         if self.generate_profs:
             self.profile_files.append(profdatafile)
         else:
@@ -123,6 +131,10 @@ class Function:
 
 
 def my_add(a, b):
+    if isinstance(a, list):
+        return []
+    if isinstance(b, list):
+        return []
     if a is None:
         return b
     if b is None:
@@ -151,7 +163,9 @@ def get_empty_statistics():
         'num_bbs': None,
         'num_bbs_executed': [],
         'input_generated_by_seed': [],
+        'input_generated_by_seed_non_unreachable': [],
         'input_ran_by_seed': [],
+        'input_ran_by_seed_non_unreachable': [],
     }
     return stats
 
@@ -310,6 +324,7 @@ class InputGenModule:
             seed = 0 if len(func.tried_seeds) == 0 else func.tried_seeds[-1] + 1
             for _ in range(input_gen_num):
                 succeeded = False
+                unreachable_exit = None
                 try:
                     func.tried_seeds.append(seed)
                     start = seed
@@ -344,9 +359,9 @@ class InputGenModule:
                     # one output at a time.
                     out, err = proc.communicate(timeout=self.input_gen_timeout)
 
-                    if proc.returncode != 0:
-                        self.print('Input gen process failed: {} @{}'.format(fid, fname))
-                    else:
+                    if proc.returncode == 0 or proc.returncode == UNREACHABLE_EXIT_STATUS:
+                        unreachable_exit = bool(proc.returncode == UNREACHABLE_EXIT_STATUS)
+
                         fins = [os.path.join(inputs_dir,
                                             '{}.input.{}.{}.bin'.format(
                                                 os.path.basename(input_gen_executable), fid, str(i)))
@@ -363,6 +378,8 @@ class InputGenModule:
                                 # that. (Happens in
                                 # 12374:_ZN25vnl_symmetric_eigensystemIdE5solveERK10vnl_vectorIdEPS2_)
                                 succeeded = False
+                    else:
+                        self.print('Input gen process failed: {} @{}'.format(fid, fname))
 
                 except subprocess.CalledProcessError as e:
                     self.print('Input gen process failed: {} @{}'.format(fid, fname))
@@ -382,8 +399,11 @@ class InputGenModule:
                     # Populate the generated inputs
                     func.succeeded_seeds += list(range(start, end))
                     func.inputs += fins
+                    assert(len(fins) == 1)
+                    func.unreachable_exit_inputs.append(unreachable_exit)
                 else:
                     func.inputs += [None for _ in range(start, end)]
+                    func.unreachable_exit_inputs += [None for _ in range(start, end)]
 
     def run_inputs(self, idx):
         for func in self.functions:
@@ -422,12 +442,32 @@ class InputGenModule:
                 stats['num_input_generated_funcs'] += 1
             if len([time for time in func.times if time is not None]) != 0:
                 stats['num_input_ran_funcs'] += 1
-            stats['input_generated_by_seed'] = [
-                my_add(0 if inpt is None else 1, num)
-                for inpt, num in zip_longest(func.inputs, stats['input_generated_by_seed'])]
-            stats['input_ran_by_seed'] = [
-                my_add(0 if time is None else 1, num)
-                for time, num in zip_longest(func.times, stats['input_ran_by_seed'])]
+
+        def ensure_length(l):
+            for _ in range(self.input_gen_num - len(l)):
+                l.append(None)
+        ensure_length(stats['input_generated_by_seed'])
+        ensure_length(stats['input_ran_by_seed'])
+        ensure_length(stats['input_generated_by_seed_non_unreachable'])
+        ensure_length(stats['input_ran_by_seed_non_unreachable'])
+        generated_funcs = set()
+        ran_funcs = set()
+        generated_funcs_nu = set()
+        ran_funcs_nu = set()
+        for i in range(self.input_gen_num):
+            for func in self.functions:
+                if func.inputs[i]:
+                    generated_funcs.add(func.ident)
+                    if not func.unreachable_exit_inputs[i]:
+                        generated_funcs_nu.add(func.ident)
+                if func.times[i]:
+                    ran_funcs.add(func.ident)
+                    if not func.unreachable_exit_times[i]:
+                        ran_funcs_nu.add(func.ident)
+            stats['input_generated_by_seed'][i] = len(generated_funcs)
+            stats['input_ran_by_seed'][i] = len(ran_funcs)
+            stats['input_generated_by_seed_non_unreachable'][i] = len(generated_funcs_nu)
+            stats['input_ran_by_seed_non_unreachable'][i] = len(ran_funcs_nu)
 
         if self.instrumentation_failed:
             return

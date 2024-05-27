@@ -1189,7 +1189,7 @@ void __inputgen_cmp_ptr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
 }
 void __inputgen_unreachable(int32_t No, const char *Name) {
   printf("Reached unreachable %i due to '%s'\n", No, Name ? Name : "n/a");
-  exit(0);
+  exit(UnreachableExitStatus);
 }
 }
 
