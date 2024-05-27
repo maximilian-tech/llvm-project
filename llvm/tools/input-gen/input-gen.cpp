@@ -456,14 +456,14 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  stripUnknownOperandBundles(*M);
-
   InputGenOrchestration IGO(*M);
 
   if (ClFunction.getNumOccurrences() > 0) {
+    stripUnknownOperandBundles(*M);
     IGO.genFunctionForAllRuntimes(ClFunction, argv[0]);
   } else {
     IGO.dumpFunctions();
+    stripUnknownOperandBundles(*M);
     IGO.genAllFunctionForAllRuntimes(argv[0]);
   }
 
