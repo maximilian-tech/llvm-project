@@ -450,6 +450,10 @@ class InputGenModule:
         ensure_length(stats['input_ran_by_seed'])
         ensure_length(stats['input_generated_by_seed_non_unreachable'])
         ensure_length(stats['input_ran_by_seed_non_unreachable'])
+
+        if self.instrumentation_failed:
+            return
+
         generated_funcs = set()
         ran_funcs = set()
         generated_funcs_nu = set()
@@ -468,9 +472,6 @@ class InputGenModule:
             stats['input_ran_by_seed'][i] = len(ran_funcs)
             stats['input_generated_by_seed_non_unreachable'][i] = len(generated_funcs_nu)
             stats['input_ran_by_seed_non_unreachable'][i] = len(ran_funcs_nu)
-
-        if self.instrumentation_failed:
-            return
 
         if not self.coverage_statistics:
             return
