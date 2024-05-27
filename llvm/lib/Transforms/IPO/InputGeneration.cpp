@@ -45,6 +45,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
@@ -2065,3 +2066,31 @@ void InputGenInstrumenter::instrumentFunction(Function &F) {
   LLVM_DEBUG(dbgs() << "INPUTGEN done instrumenting: " << ToInstrumentMem.size()
                     << " instructions in " << F.getName() << "\n");
 }
+
+namespace llvm {
+void stripUnknownOperandBundles(Module &M) {
+  SmallVector<unsigned, LLVMContext::OB_convergencectrl + 1> KnownOBs;
+  for (unsigned OB = LLVMContext::OB_deopt;
+       OB <= LLVMContext::OB_convergencectrl; OB++)
+    KnownOBs.push_back(OB);
+  SmallVector<CallBase *> ToRemove;
+  for (auto &F : M.functions()) {
+    for (auto &I : instructions(F)) {
+      if (auto *CB = dyn_cast<CallBase>(&I)) {
+        SmallVector<OperandBundleDef, 1> Bundles;
+        for (unsigned I = 0, E = CB->getNumOperandBundles(); I != E; ++I) {
+          auto Bundle = CB->getOperandBundleAt(I);
+          if (is_contained(KnownOBs, Bundle.getTagID()))
+            Bundles.emplace_back(Bundle);
+        }
+        auto *NewCall = CallBase::Create(CB, Bundles, CB);
+        NewCall->copyMetadata(*CB);
+        CB->replaceAllUsesWith(NewCall);
+        ToRemove.push_back(CB);
+      }
+    }
+  }
+  for (auto *CB : ToRemove)
+    CB->eraseFromParent();
+}
+} // namespace llvm

@@ -233,6 +233,7 @@ private:
 bool inputGenerationInstrumentModuleForFunction(Function &F,
                                                 ModuleAnalysisManager &MAM,
                                                 IGInstrumentationModeTy Mode);
+void stripUnknownOperandBundles(Module &M);
 
 } // namespace llvm
 

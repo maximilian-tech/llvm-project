@@ -456,6 +456,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  stripUnknownOperandBundles(*M);
+
   InputGenOrchestration IGO(*M);
 
   if (ClFunction.getNumOccurrences() > 0) {
