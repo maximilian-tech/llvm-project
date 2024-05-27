@@ -930,7 +930,9 @@ Function &InputGenInstrumenter::createFunctionPtrStub(Module &M, CallBase &CB) {
       "__inputgen_fpstub_" + std::to_string(StubNameCounter++), M);
   F->setCallingConv(CB.getCallingConv());
   stubDeclaration(M, *F);
-  IRBuilder<> IRB(&F->getEntryBlock());
+  IRBuilder<> IRB(
+      &F->getEntryBlock(),
+      F->getEntryBlock().getFirstNonPHIOrDbgOrAlloca()->getIterator());
   setABIInfo(*F, ABIInfo, IRB);
   return *F;
 }
@@ -1079,7 +1081,7 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
             CBList.insert(&Callee);
           return false;
         }
-          LLVM_DEBUG(dbgs() << "ignoring\n");
+        LLVM_DEBUG(dbgs() << "ignoring\n");
         return false;
       };
 
@@ -1874,8 +1876,8 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
     if (Arg.hasSwiftErrorAttr())
       Args.push_back(createSwiftErrorAlloca(IRB));
     else
-    Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
-                                               Arg.getType(), &Arg, &VMap));
+      Args.push_back(constructTypeUsingCallbacks(M, IRB, ArgGenCallback,
+                                                 Arg.getType(), &Arg, &VMap));
     VMap[&Arg] = Args.back();
   }
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
