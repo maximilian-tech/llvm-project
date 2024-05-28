@@ -62,6 +62,137 @@ static void dumpBranchHints(BranchHint *BHs, int32_t BHSize) {
   }
 }
 
+template <typename TgtTy, typename SrcTy> static inline TgtTy pun(SrcTy Src) {
+  TgtTy Res = 0;
+  *reinterpret_cast<SrcTy *>(&Res) = Src;
+  return Res;
+}
+
+struct CVIDescriptorTy {
+  int32_t NumArgs;
+  int32_t ArgNo;
+  void *Fn;
+};
+
+struct InputsInfoTy {
+  int32_t ReadyBits = 0;
+  uintptr_t *Inputs = nullptr;
+};
+
+typedef int32_t CVIFpTy(uintptr_t *);
+
+struct CVIHandlerTy {
+  CVIHandlerTy(std::mt19937 &Gen, std::uniform_int_distribution<> &Rand)
+      : Gen(Gen), Rand(Rand) {}
+
+  std::mt19937 &Gen;
+  std::uniform_int_distribution<> &Rand;
+  std::map<void *, InputsInfoTy> InputStagingMap;
+
+  template <typename CBTy>
+  void foreachDescriptor(int32_t CVISize, void *CVIs, CBTy CB) {
+    for (int32_t I = 0; I < CVISize; ++I) {
+      CVIDescriptorTy &Descriptor =
+          *reinterpret_cast<CVIDescriptorTy **>(CVIs)[I];
+      CB(Descriptor, I);
+    }
+  }
+
+  bool evaluate(CVIDescriptorTy &Descriptor, uintptr_t Input, int TgtBranch) {
+    InputsInfoTy &InputsInfo = InputStagingMap[Descriptor.Fn];
+    InputsInfo.Inputs[Descriptor.ArgNo] = Input;
+    auto *Fp = reinterpret_cast<CVIFpTy *>(Descriptor.Fn);
+    return Fp(InputsInfo.Inputs) == TgtBranch;
+  }
+
+  bool setInputReady(CVIDescriptorTy &Descriptor, uintptr_t Input) {
+    InputsInfoTy &InputsInfo = InputStagingMap[Descriptor.Fn];
+    if (!InputsInfo.Inputs)
+      InputsInfo.Inputs = new uintptr_t[Descriptor.NumArgs];
+    InputsInfo.Inputs[Descriptor.ArgNo] = Input;
+    InputsInfo.ReadyBits |= 1 << Descriptor.ArgNo;
+    return (InputsInfo.ReadyBits == (1 << Descriptor.NumArgs) - 1);
+  }
+
+  template <typename T> int32_t define(T Val, int32_t CVISize, void *CVIs) {
+    int32_t TgtBranch = Rand(Gen) % 2;
+
+    std::vector<std::pair<CVIDescriptorTy *, int32_t>> ReadyDescriptors;
+    ReadyDescriptors.reserve(CVISize);
+    auto CB = [&](CVIDescriptorTy &Descriptor, int32_t Idx) {
+      if (setInputReady(Descriptor, pun<uintptr_t>(Val)))
+        ReadyDescriptors.push_back({&Descriptor, Idx});
+    };
+    foreachDescriptor(CVISize, CVIs, CB);
+
+    if (ReadyDescriptors.empty())
+      return -1;
+
+    int32_t TgtCVI = Rand(Gen) % ReadyDescriptors.size();
+    return evaluate(*ReadyDescriptors[TgtCVI].first, pun<uintptr_t>((T)Val),
+                    TgtBranch);
+  }
+
+  template <typename T>
+  T generateValue(int32_t CVISize, void *CVIs, T DefaultValue, int TgtBranch,
+                  int TgtCVI) {
+    bool HasMultiArgInputs = false;
+
+    std::vector<std::pair<CVIDescriptorTy *, int32_t>> ReadyDescriptors;
+    ReadyDescriptors.reserve(CVISize);
+
+    auto CB = [&](CVIDescriptorTy &Descriptor, int32_t Idx) {
+      HasMultiArgInputs |= Descriptor.NumArgs > 1;
+      if (!setInputReady(Descriptor, pun<uintptr_t>(DefaultValue)))
+        return;
+      ReadyDescriptors.push_back({&Descriptor, Idx});
+    };
+    foreachDescriptor(CVISize, CVIs, CB);
+
+    if (ReadyDescriptors.empty())
+      return DefaultValue;
+
+    int32_t BestHits = 0;
+    T BestValue = DefaultValue;
+
+    auto Eval = [&](T V, int32_t &VHits) {
+      for (auto &It : ReadyDescriptors) {
+        if (evaluate(*It.first, pun<uintptr_t>((T)V), TgtBranch))
+          VHits += (It.second == TgtCVI) ? 100 : 1;
+      }
+    };
+
+    for (int32_t V = -256; V < 257; ++V) {
+      int32_t VHits = 0;
+      Eval((T)V, VHits);
+      if constexpr (std::is_floating_point<T>::value) {
+        Eval((T)1 / (T)0, VHits);
+        Eval((T)0 / (T)0, VHits);
+        Eval(-1 * (T)0, VHits);
+        Eval((T)1 / 3, VHits);
+      }
+      if (VHits <= BestHits)
+        continue;
+      BestHits = VHits;
+      BestValue = V;
+    }
+
+    if (!HasMultiArgInputs || BestValue == DefaultValue)
+      return BestValue;
+
+    // Update the input descriptors
+    auto UpdateBestValue = [&](CVIDescriptorTy &Descriptor, int32_t Idx) {
+      if (Descriptor.NumArgs == 1)
+        return;
+      InputsInfoTy &InputsInfo = InputStagingMap[Descriptor.Fn];
+      InputsInfo.Inputs[Descriptor.ArgNo] = pun<uintptr_t>(BestValue);
+    };
+    foreachDescriptor(CVISize, CVIs, UpdateBestValue);
+
+    return BestValue;
+  }
+};
+
 template <typename T> static T divFloor(T A, T B) {
   assert(B > 0);
   T Res = A / B;
@@ -195,7 +326,8 @@ struct ObjectTy {
   }
 
   template <typename T>
-  T read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize);
+  T read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize,
+         int32_t CVISize, void *CVIs);
 
   template <typename T> void write(T Val, VoidPtrTy Ptr, uint32_t Size) {
     intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
@@ -427,6 +559,7 @@ struct InputGenRTTy {
   std::filesystem::path ExecPath;
   std::mt19937 Gen;
   std::uniform_int_distribution<> Rand;
+  CVIHandlerTy CVIHandler{Gen, Rand};
   std::uniform_real_distribution<> DefaultFloatDistrib;
   std::uniform_int_distribution<> DefaultIntDistrib;
   struct AlignedAllocation {
@@ -548,7 +681,8 @@ struct InputGenRTTy {
   ObjectTy *globalPtrToObj(VoidPtrTy GlobalPtr, bool AllowNull = false) {
     size_t Idx = getObjIdx(GlobalPtr, AllowNull);
     bool IsExistingObj = Idx >= 0 && Idx < Objects.size();
-    [[maybe_unused]] bool IsOutsideObjMemory = Idx > OA.MaxObjectNum || Idx < 0;
+    [[maybe_unused]] bool IsOutsideObjMemory =
+        Idx >= OA.MaxObjectNum || Idx < 0;
     assert(IsExistingObj || IsOutsideObjMemory);
     if (IsExistingObj) {
       INPUTGEN_DEBUG(std::cerr << "Access: " << (void *)GlobalPtr << " Obj #"
@@ -607,15 +741,17 @@ struct InputGenRTTy {
     }
   }
 
-  template <typename T> T getNewArg(BranchHint *BHs, int32_t BHSize) {
-    T V = getNewValue<T>(BHs, BHSize);
+  template <typename T>
+  T getNewArg(BranchHint *BHs, int32_t BHSize, int32_t CVISize, void *CVIs) {
+    T V = getNewValue<T>(BHs, BHSize, CVISize, CVIs);
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
     NumArgs++;
     return V;
   }
 
-  template <typename T> T getNewStub(BranchHint *BHs, int32_t BHSize) {
-    T V = getNewValue<T>(BHs, BHSize);
+  template <typename T>
+  T getNewStub(BranchHint *BHs, int32_t BHSize, int32_t CVISize, void *CVIs) {
+    T V = getNewValue<T>(BHs, BHSize, CVISize, CVIs);
     GenVals.push_back(toGenValTy(V, std::is_pointer<T>::value));
     return V;
   }
@@ -722,15 +858,18 @@ struct InputGenRTTy {
     }
   }
 
-  template <typename T> T getNewValue(BranchHint *BHs, int32_t BHSize) {
+  template <typename T>
+  T getNewValue(BranchHint *BHs, int32_t BHSize, int32_t CVISize, void *CVIs) {
     if constexpr (std::is_same<T, bool>::value) {
-      return getNewValueImpl<char>(BHs, BHSize);
+      return getNewValueImpl<char>(BHs, BHSize, CVISize, CVIs);
     } else {
-      return getNewValueImpl<T>(BHs, BHSize);
+      return getNewValueImpl<T>(BHs, BHSize, CVISize, CVIs);
     }
   }
 
-  template <typename T> T getNewValueImpl(BranchHint *BHs, int32_t BHSize) {
+  template <typename T>
+  T getNewValueImpl(BranchHint *BHs, int32_t BHSize, int32_t CVISize,
+                    void *CVIs) {
     static_assert(!std::is_pointer<T>::value);
     NumNewValues++;
     INPUTGEN_DEBUG(dumpBranchHints<T>(BHs, BHSize));
@@ -805,11 +944,16 @@ struct InputGenRTTy {
       return GenVal;
     }
 
+    if (CVISize)
+      return CVIHandler.generateValue<T>(CVISize, CVIs, getDefaultNewValue<T>(),
+                                         rand() % 2, rand() % CVISize);
+
     return getDefaultNewValue<T>();
   }
 
   template <>
-  VoidPtrTy getNewValue<VoidPtrTy>(BranchHint *BHs, int32_t BHSize) {
+  VoidPtrTy getNewValue<VoidPtrTy>(BranchHint *BHs, int32_t BHSize,
+                                   int32_t CVISize, void *CVIs) {
     NumNewValues++;
     // We let the ptr cmp retry handle null pointers if it is enabled
     if (InputGenConf.EnablePtrCmpRetry || (rand() % NullPtrProbability)) {
@@ -823,7 +967,8 @@ struct InputGenRTTy {
   }
 
   template <>
-  FunctionPtrTy getNewValue<FunctionPtrTy>(BranchHint *BHs, int32_t BHSize) {
+  FunctionPtrTy getNewValue<FunctionPtrTy>(BranchHint *BHs, int32_t BHSize,
+                                           int32_t CVISize, void *CVIs) {
     NumNewValues++;
     return nullptr;
   }
@@ -837,11 +982,12 @@ struct InputGenRTTy {
 
   template <typename T>
   T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
-         int32_t BHSize) {
+         int32_t BHSize, int32_t CVISize, void *CVIs) {
     assert(Ptr);
     ObjectTy *Obj = globalPtrToObj(Ptr);
     if (Obj)
-      return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize);
+      return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize,
+                          CVISize, CVIs);
     return *reinterpret_cast<T *>(Ptr);
   }
 
@@ -1021,8 +1167,8 @@ static InputGenRTTy *InputGenRT;
 static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T>
-T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
-                 int32_t BHSize) {
+T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs, int32_t BHSize,
+                 int32_t CVISize, void *CVIs) {
   intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
   assert(Output.isAllocated(Offset, Size));
   Used.ensureAllocation(Offset, Size);
@@ -1036,7 +1182,7 @@ T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
   if constexpr (std::is_same<T, FunctionPtrTy>::value)
     return nullptr;
 
-  T Val = getInputGenRT().getNewValue<T>(BHs, BHSize);
+  T Val = getInputGenRT().getNewValue<T>(BHs, BHSize, CVISize, CVIs);
   storeGeneratedValue(Val, Offset, Size);
 
   if constexpr (std::is_pointer<T>::value)
@@ -1067,7 +1213,7 @@ VoidPtrTy __inputgen_select_fp(VoidPtrTy *PotentialFPs, uint64_t N) {
 void __inputgen_access_fp(VoidPtrTy Ptr, int32_t Size, VoidPtrTy Base,
                           VoidPtrTy *PotentialFPs, uint64_t N) {
   if (!getInputGenRT().read<FunctionPtrTy>(Ptr, Base, Size, /* BHs */ nullptr,
-                                           0)) {
+                                           0, 0, nullptr)) {
     getInputGenRT().registerFunctionPtrAccess(Ptr, Size, PotentialFPs, N);
     return;
   }
@@ -1084,7 +1230,8 @@ VoidPtrTy __inputgen_memmove(VoidPtrTy Tgt, VoidPtrTy Src, uint64_t N) {
   VoidPtrTy SrcIt = Src;
   VoidPtrTy TgtIt = Tgt;
   for (uintptr_t I = 0; I < N; ++I, ++SrcIt, ++TgtIt) {
-    auto V = getInputGenRT().read<char>(SrcIt, Src, sizeof(char), nullptr, 0);
+    auto V = getInputGenRT().read<char>(SrcIt, Src, sizeof(char), nullptr, 0, 0,
+                                        nullptr);
     getInputGenRT().write<char>(TgtIt, V, sizeof(char));
   }
   return TgtIt;
@@ -1102,15 +1249,16 @@ VoidPtrTy __inputgen_memset(VoidPtrTy Tgt, char C, uint64_t N) {
 }
 
 #define RW(TY, NAME)                                                           \
-  TY __inputgen_get_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
-    return getInputGenRT().getNewStub<TY>(BHs, BHSize);                        \
+  TY __inputgen_get_##NAME(BranchHint *BHs, int32_t BHSize, int32_t CVISize,   \
+                           void *CVIs) {                                       \
+    return getInputGenRT().getNewStub<TY>(BHs, BHSize, CVISize, CVIs);         \
   }                                                                            \
   void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
                                 VoidPtrTy Base, int32_t Kind, BranchHint *BHs, \
-                                int32_t BHSize) {                              \
+                                int32_t BHSize, int32_t CVISize, void *CVIs) { \
     switch (Kind) {                                                            \
     case 0:                                                                    \
-      getInputGenRT().read<TY>(Ptr, Base, Size, BHs, BHSize);                  \
+      getInputGenRT().read<TY>(Ptr, Base, Size, BHs, BHSize, CVISize, CVIs);   \
       return;                                                                  \
     case 1:                                                                    \
       TY TyVal;                                                                \
@@ -1132,17 +1280,18 @@ VoidPtrTy __inputgen_memset(VoidPtrTy Tgt, char C, uint64_t N) {
   }
 
 #define RWREF(TY, NAME)                                                        \
-  TY __inputgen_get_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
-    return getInputGenRT().getNewStub<TY>(BHs, BHSize);                        \
+  TY __inputgen_get_##NAME(BranchHint *BHs, int32_t BHSize, int32_t CVISize,   \
+                           void *CVIs) {                                       \
+    return getInputGenRT().getNewStub<TY>(BHs, BHSize, CVISize, CVIs);         \
   }                                                                            \
   void __inputgen_access_##NAME(VoidPtrTy Ptr, int64_t Val, int32_t Size,      \
                                 VoidPtrTy Base, int32_t Kind, BranchHint *BHs, \
-                                int32_t BHSize) {                              \
+                                int32_t BHSize, int32_t CVISize, void *CVIs) { \
     static_assert(sizeof(TY) > 8);                                             \
     TY TyVal;                                                                  \
     switch (Kind) {                                                            \
     case 0:                                                                    \
-      getInputGenRT().read<TY>(Ptr, Base, Size, BHs, BHSize);                  \
+      getInputGenRT().read<TY>(Ptr, Base, Size, BHs, BHSize, CVISize, CVIs);   \
       return;                                                                  \
     case 1:                                                                    \
       TyVal = *(TY *)Val;                                                      \
@@ -1166,8 +1315,12 @@ RWREF(long double, x86_fp80)
 #undef RW
 
 #define ARG(TY, NAME)                                                          \
-  TY __inputgen_arg_##NAME(BranchHint *BHs, int32_t BHSize) {                  \
-    return getInputGenRT().getNewArg<TY>(BHs, BHSize);                         \
+  TY __inputgen_arg_##NAME(BranchHint *BHs, int32_t BHSize, int32_t CVISize,   \
+                           void *CVIs) {                                       \
+    return getInputGenRT().getNewArg<TY>(BHs, BHSize, CVISize, CVIs);          \
+  }                                                                            \
+  int32_t __inputgen_define_##NAME(TY Val, int32_t CVISize, void *CVIs) {      \
+    return getInputGenRT().CVIHandler.define<TY>(Val, CVISize, CVIs);          \
   }
 
 ARG(bool, i1)

@@ -30,6 +30,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -53,6 +54,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/ProfileData/InstrProfReader.h"
 #include "llvm/Support/BLAKE3.h"
@@ -68,12 +70,14 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/IPO/InputGenerationImpl.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <iterator>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -135,9 +139,413 @@ static cl::opt<bool>
                              cl::desc("Actively handle function pointers"),
                              cl::Hidden, cl::init(true));
 
+static cl::opt<bool>
+    ClUseCVIs("input-gen-use-cvis",
+              cl::desc("Try to use AABranchHints to generate CVIs"), cl::Hidden,
+              cl::init(false));
+
 STATISTIC(NumInstrumented, "Number of instrumented instructions");
 
 namespace {
+
+std::string getTypeName(const Type *Ty) {
+  switch (Ty->getTypeID()) {
+  case Type::TypeID::PointerTyID:
+    return "ptr";
+  case Type::TypeID::IntegerTyID:
+    return "i" + to_string(Ty->getIntegerBitWidth());
+  case Type::TypeID::FloatTyID:
+    return "float";
+  case Type::TypeID::DoubleTyID:
+    return "double";
+  case Type::TypeID::X86_FP80TyID:
+    return "x86_fp80";
+  default:
+    return "unknown";
+  };
+}
+
+struct CondValueInfo {
+  Attributor &A;
+  AA::ValueAndContext VAC;
+
+  DenseMap<Instruction *, unsigned> InstUsesMap;
+  DenseMap<Value *, Value *> SimplifyMap;
+  DenseMap<Value *, SmallVector<CondValueInfo *>> ChildCondValueInfosMap;
+  SmallSetVector<Value *, 16> LeafValues;
+  SmallVector<Type *> InputTypes;
+
+  CondValueInfo(Attributor &A, AA::ValueAndContext VAC, AbstractAttribute &AA)
+      : A(A), VAC(VAC) {
+    SmallPtrSet<Value *, 16> Visited;
+    SmallVector<Value *> Worklist;
+    Worklist.push_back(VAC.getValue());
+
+    auto HandleTerminal = [&](Value &V) {
+      if (auto *I = dyn_cast<Instruction>(&V)) {
+        if (!isa<PHINode>(I) && !I->mayReadOrWriteMemory() &&
+            isSafeToSpeculativelyExecute(I)) {
+          if (InstUsesMap[I]++ == 0)
+            Worklist.append(I->op_begin(), I->op_end());
+          return;
+        }
+      }
+      LeafValues.insert(&V);
+      InputTypes.push_back(V.getType());
+      return;
+    };
+
+    while (!Worklist.empty()) {
+      Value *V = Worklist.pop_back_val();
+      if (!Visited.insert(V).second)
+        continue;
+      if (isa<Constant>(V))
+        continue;
+
+      bool UsedAssumedInformation = false;
+      SmallVector<AA::ValueAndContext> Values;
+      if (!A.getAssumedSimplifiedValues(IRPosition::value(*V), &AA, Values,
+                                        AA::ValueScope::Interprocedural,
+                                        UsedAssumedInformation)) {
+        HandleTerminal(*V);
+        continue;
+      }
+      if (Values.size() == 1) {
+        auto *SimpleV = Values.front().getValue();
+        if (SimpleV == V) {
+          HandleTerminal(*V);
+          continue;
+        }
+        SimplifyMap[V] = SimpleV;
+      }
+
+      LeafValues.insert(V);
+      SmallVector<CondValueInfo *> &ChildCondValueInfos =
+          ChildCondValueInfosMap[V];
+      InputTypes.push_back(V->getType());
+      for (auto &VAC : Values) {
+        ChildCondValueInfos.push_back(new CondValueInfo(A, VAC, AA));
+      }
+    }
+  }
+  ~CondValueInfo() {
+    for (auto &It : ChildCondValueInfosMap) {
+      for (auto *CVI : It.second)
+        delete CVI;
+    }
+  }
+};
+
+struct AABranchHints : public StateWrapper<BooleanState, AbstractAttribute> {
+  using CVIFnMapTy = DenseMap<Value *, Function *>;
+  using InputMapTy = DenseMap<AA::ValueAndContext, CallInst *>;
+  using InitializerMapTy = DenseMap<Constant *, GlobalVariable *>;
+
+  AABranchHints(const IRPosition &IRP, Attributor &A, CVIFnMapTy &CVIFnMap,
+                InputMapTy &InputMap, InitializerMapTy &InitializerMap)
+      : StateWrapper<BooleanState, AbstractAttribute>(IRP), CVIFnMap(CVIFnMap),
+        InputMap(InputMap), InitializerMap(InitializerMap) {
+    if (!CVIDescriptorTy) {
+      auto &Ctx = getAssociatedValue().getContext();
+      SmallVector<Type *> Types;
+      // #Args
+      Types.push_back(Type::getInt32Ty(Ctx));
+      // input index
+      Types.push_back(Type::getInt32Ty(Ctx));
+      // Function Pointer
+      Types.push_back(PointerType::getUnqual(Ctx));
+      CVIDescriptorTy = StructType::create(Ctx, Types, "CVIDescriptorTy");
+    }
+  }
+
+  static StructType *CVIDescriptorTy;
+
+  /// Create an abstract attribute view for the position \p IRP.
+  static AABranchHints &createForPosition(const IRPosition &IRP, Attributor &A);
+
+  /// See AbstractAttribute::getName()
+  const std::string getName() const override { return "AABranchHints"; }
+
+  /// See AbstractAttribute::getIdAddr()
+  const char *getIdAddr() const override { return &ID; }
+
+  /// This function should return true if the type of the \p AA is
+  /// AABranchHints
+  /// This function should return true if the type of the \p AA is
+  /// AADenormalFPMath.
+  static bool classof(const AbstractAttribute *AA) {
+    return (AA->getIdAddr() == &ID);
+  }
+
+  /// Unique ID (due to the unique address)
+  static const char ID;
+
+  DenseMap<std::pair<CondValueInfo *, int>, Constant *> DescriptorMap;
+  CVIFnMapTy &CVIFnMap;
+  InputMapTy &InputMap;
+  InitializerMapTy &InitializerMap;
+
+  /// See AbstractAttribute::initialize(...).
+  void initialize(Attributor &A) override {}
+
+  /// See AbstractAttribute::updateImpl(...).
+  ChangeStatus updateImpl(Attributor &A) override {
+    CondValueInfo CVI(A, {getAssociatedValue(), getCtxI()}, *this);
+    const auto &DL = A.getDataLayout();
+    for (auto *Ty : CVI.InputTypes) {
+      if (DL.getTypeStoreSize(Ty) > 8)
+        return indicatePessimisticFixpoint();
+    }
+    return ChangeStatus::UNCHANGED;
+  }
+
+  /// See AbstractAttribute::manifest(...).
+  ChangeStatus manifest(Attributor &A) override {
+    bool Changed = false;
+
+    CondValueInfo CVI(A, {getAssociatedValue(), getCtxI()}, *this);
+
+    bool HasInterestingInput = false;
+    SmallVector<CondValueInfo *> Worklist;
+    Worklist.push_back(&CVI);
+    while (!Worklist.empty()) {
+      auto *CVI = Worklist.pop_back_val();
+      auto *CI = dyn_cast<CallInst>(CVI->VAC.getValue());
+      if (CI && CI->getCalledFunction() &&
+          CI->getCalledFunction()->getName().starts_with("__inputgen_")) {
+        HasInterestingInput = true;
+        break;
+      }
+      for (auto &It : CVI->ChildCondValueInfosMap)
+        Worklist.append(It.second);
+    }
+
+    if (!HasInterestingInput)
+      return ChangeStatus::UNCHANGED;
+
+    createConditionFn(A, CVI, nullptr);
+
+    return ChangeStatus::CHANGED;
+  }
+
+  /// See AbstractAttribute::getAsStr().
+  const std::string getAsStr(Attributor *A) const override { return "[BH]"; }
+
+  void trackStatistics() const override {}
+
+private:
+  Constant *getCVIDescriptor(Module &M, CondValueInfo &CVI,
+                             CondValueInfo &ParentCVI, int InputIdx) {
+    Constant *&Descriptor = DescriptorMap[{&ParentCVI, InputIdx}];
+    if (!Descriptor) {
+      auto *Int32Ty = IntegerType::getInt32Ty(M.getContext());
+      SmallVector<Constant *> Values;
+      Values.push_back(ConstantInt::get(Int32Ty, ParentCVI.LeafValues.size()));
+      Values.push_back(ConstantInt::get(Int32Ty, InputIdx));
+      Values.push_back(CVIFnMap[ParentCVI.VAC.getValue()]);
+      assert(CVIDescriptorTy);
+      assert(Values.back());
+      auto *Initializer = ConstantStruct::get(CVIDescriptorTy, Values);
+      Descriptor = new GlobalVariable(M, Initializer->getType(), true,
+                                      llvm::GlobalValue::PrivateLinkage,
+                                      Initializer, "");
+    }
+    return Descriptor;
+  }
+
+  void updateCallInst(CallInst &CI, CondValueInfo &CVI,
+                      CondValueInfo &ParentCVI, int32_t InputIdx) {
+    Module &M = *CI.getModule();
+    auto &Ctx = M.getContext();
+    Type *PtrTy = PointerType::getUnqual(Ctx);
+    auto *Int32Ty = IntegerType::getInt32Ty(Ctx);
+    unsigned CVIsArgNo = CI.arg_size() - 1;
+    Value *CVIsArg = CI.getArgOperand(CVIsArgNo);
+
+    SmallSetVector<Constant *, 8> CVIDescriptors;
+    if (CVIsArg != Constant::getNullValue(PtrTy)) {
+      GlobalVariable *CVIsArgVal = cast<GlobalVariable>(CVIsArg);
+      auto *OldInit = cast<ConstantArray>(CVIsArgVal->getInitializer());
+      for (unsigned U = 0; U < OldInit->getNumOperands(); ++U)
+        CVIDescriptors.insert(OldInit->getAggregateElement(U));
+      if (CVIsArgVal->getNumUses() == 1) {
+        CVIsArgVal->replaceAllUsesWith(UndefValue::get(CVIsArgVal->getType()));
+        CVIsArgVal->eraseFromParent();
+      }
+    }
+    CVIDescriptors.insert(getCVIDescriptor(M, CVI, ParentCVI, InputIdx));
+    auto *Initializer =
+        ConstantArray::get(ArrayType::get(PtrTy, CVIDescriptors.size()),
+                           CVIDescriptors.getArrayRef());
+    //      auto *&GV = InitializerMap[Initializer];
+    //      if (!GV)
+    auto *GV = new GlobalVariable(M, Initializer->getType(), true,
+                                  GlobalValue::PrivateLinkage, Initializer, "");
+    CI.setArgOperand(CVIsArgNo, GV);
+
+    unsigned CntArgNo = CI.arg_size() - 2;
+    CI.setArgOperand(CntArgNo,
+                     ConstantInt::get(Int32Ty, CVIDescriptors.size()));
+  }
+
+  void addCVIUpdateToInput(CondValueInfo &CVI, CondValueInfo &ParentCVI,
+                           int InputIdx, InformationCache &InfoCache) {
+    Module &M = *getAssociatedFunction()->getParent();
+    auto &Ctx = M.getContext();
+    auto *VoidTy = Type::getVoidTy(Ctx);
+    Type *PtrTy = PointerType::getUnqual(Ctx);
+    auto *Int32Ty = IntegerType::getInt32Ty(Ctx);
+
+    Value *V = CVI.VAC.getValue();
+    if (auto *CI = dyn_cast<CallInst>(V)) {
+      if (CI->getCalledFunction() &&
+          (CI->getCalledFunction()->getName().starts_with("__inputgen_arg") ||
+           CI->getCalledFunction()->getName().starts_with("__inputgen_get"))) {
+        InputMap[CVI.VAC] = CI;
+      }
+    } else if (auto *LI = dyn_cast<LoadInst>(V)) {
+      if (&LI->getParent()->front() != LI) {
+        if (auto *CI = dyn_cast<CallInst>(LI->getPrevNode())) {
+          if (CI->getCalledFunction() &&
+              CI->getCalledFunction()->getName().starts_with(
+                  "__inputgen_access")) {
+            InputMap[CVI.VAC] = CI;
+          }
+        }
+      }
+    }
+
+    CallInst *&CI = InputMap[CVI.VAC];
+    if (!CI) {
+      if (!(CVI.VAC.getCtxI() && AA::isValidAtPosition(CVI.VAC, InfoCache)) &&
+          !isa<Instruction>(V))
+        return;
+      auto *Ty = V->getType();
+      auto *IP = isa<Instruction>(V)
+                     ? cast<Instruction>(V)->getNextNode()
+                     : const_cast<Instruction *>(CVI.VAC.getCtxI());
+      const auto &Callee = M.getOrInsertFunction(
+          InputGenCallbackPrefix + "define_" + ::getTypeName(Ty), Int32Ty, Ty,
+          Int32Ty, PtrTy);
+      CI = CallInst::Create(
+          Callee,
+          {V, ConstantInt::get(Int32Ty, 0), Constant::getNullValue(PtrTy)}, "",
+          IP);
+    }
+
+    updateCallInst(*CI, CVI, ParentCVI, InputIdx);
+  }
+
+  void createConditionFn(Attributor &A, CondValueInfo &CVI,
+                         CondValueInfo *ParentCVI, int InputIdx = -1) {
+    if (CVI.InstUsesMap.empty() && CVI.ChildCondValueInfosMap.empty()) {
+      if (!(ParentCVI && InputIdx >= 0))
+        return;
+      assert(ParentCVI && InputIdx >= 0);
+      addCVIUpdateToInput(CVI, *ParentCVI, InputIdx, A.getInfoCache());
+      return;
+    }
+    if (CVI.InstUsesMap.empty() && CVI.LeafValues.size() == 1) {
+      assert(CVI.ChildCondValueInfosMap.size() == 1);
+      const auto &CCVIs = CVI.ChildCondValueInfosMap.begin()->getSecond();
+      for (auto *CCVI : CCVIs) {
+        if (ParentCVI)
+          createConditionFn(A, *CCVI, ParentCVI, InputIdx);
+        else
+          createConditionFn(A, *CCVI, nullptr, -1);
+      }
+      return;
+    }
+    auto *&Fn = CVIFnMap[CVI.VAC.getValue()];
+    if (Fn)
+      return;
+
+    Module *M = getAssociatedFunction()->getParent();
+    auto &Ctx = M->getContext();
+    auto *PtrTy = PointerType::getUnqual(Ctx);
+    auto *Int32Ty = IntegerType::getInt32Ty(Ctx);
+    //    ArrayType *InputTy = ArrayType::get(PtrTy, CVI.InputTypes.size());
+    FunctionType *FTy = FunctionType::get(Int32Ty, PtrTy, false);
+    Fn = Function::Create(FTy, GlobalValue::ExternalLinkage, "CVIFn", M);
+    auto *EntryBB = BasicBlock::Create(Ctx, "entry", Fn);
+    auto *Ret =
+        ReturnInst::Create(Ctx, UndefValue::get(FTy->getReturnType()), EntryBB);
+    IRBuilder<> IRB(Ret);
+
+    SmallVector<Value *> PackedArgs;
+    Argument *Arg = Fn->getArg(0);
+    unsigned ElemIdx = 0;
+    for (auto *ElemTy : CVI.InputTypes) {
+      auto *GEP =
+          IRB.CreateGEP(PtrTy, Arg, {ConstantInt::get(Int32Ty, ElemIdx++)});
+      PackedArgs.push_back(IRB.CreateLoad(ElemTy, GEP));
+    }
+
+    DenseMap<Value *, unsigned> LVMap;
+    for (auto *LV : CVI.LeafValues) {
+      const auto &CCVIs = CVI.ChildCondValueInfosMap.lookup(LV);
+      LVMap[LV] = LVMap.size();
+      for (auto *CCVI : CCVIs) {
+        createConditionFn(A, *CCVI, &CVI, LVMap.size() - 1);
+      }
+    }
+
+    assert(!isa<Constant>(CVI.VAC.getValue()));
+
+    Instruction *IP = Ret;
+    ValueToValueMapTy VMap;
+
+    SmallVector<Value *> Worklist;
+    Worklist.push_back(CVI.VAC.getValue());
+    while (!Worklist.empty()) {
+      Value *V = Worklist.pop_back_val();
+      if (CVI.LeafValues.count(V)) {
+        VMap[V] = PackedArgs[LVMap[V]];
+        continue;
+      }
+      if (auto *I = dyn_cast<Instruction>(V)) {
+        if (CVI.InstUsesMap[I] > 1) {
+          CVI.InstUsesMap[I]--;
+          continue;
+        }
+        Worklist.append(I->op_begin(), I->op_end());
+        auto *CloneI = I->clone();
+        CloneI->insertBefore(IP);
+        IP = CloneI;
+        VMap[I] = CloneI;
+      }
+    }
+
+    remapInstructionsInBlocks({EntryBB}, VMap);
+
+    Value *NewAV = VMap.lookup(CVI.VAC.getValue());
+    if (NewAV->getType()->isIntegerTy(1))
+      Ret->setOperand(
+          0, CastInst::CreateIntegerCast(NewAV, Int32Ty, false, "", Ret));
+    assert(!verifyFunction(*Fn, &errs()));
+    assert(!CVI.InstUsesMap.empty());
+
+    // TODO: if ParentCVI is set, push the value through
+    if (!ParentCVI)
+      return;
+
+    auto *VoidTy = Type::getVoidTy(Ctx);
+    auto *Ty = NewAV->getType();
+    const auto &Callee = M->getOrInsertFunction(
+        InputGenCallbackPrefix + "define_" + ::getTypeName(Ty), Int32Ty, Ty,
+        Int32Ty, PtrTy);
+    auto *CI = CallInst::Create(
+        Callee,
+        {NewAV, ConstantInt::get(Int32Ty, 0), Constant::getNullValue(PtrTy)},
+        "", Ret);
+    updateCallInst(*CI, CVI, *ParentCVI, InputIdx);
+    Ret->setOperand(0, CI);
+  }
+};
+
+StructType *AABranchHints::CVIDescriptorTy = nullptr;
+
+const char AABranchHints::ID = 0;
 
 // These are global variables that are never meant to be defined and are just
 // used to identify types in the source language
@@ -163,23 +571,6 @@ bool isPersonalityFunction(Function &F) {
         return true;
     return false;
   });
-}
-
-std::string getTypeName(const Type *Ty) {
-  switch (Ty->getTypeID()) {
-  case Type::TypeID::PointerTyID:
-    return "ptr";
-  case Type::TypeID::IntegerTyID:
-    return "i" + to_string(Ty->getIntegerBitWidth());
-  case Type::TypeID::FloatTyID:
-    return "float";
-  case Type::TypeID::DoubleTyID:
-    return "double";
-  case Type::TypeID::X86_FP80TyID:
-    return "x86_fp80";
-  default:
-    return "unknown";
-  };
 }
 } // end anonymous namespace
 
@@ -576,7 +967,8 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
                                   ConstantInt::get(Int32Ty, AllocSize), Base,
                                   ConstantInt::get(Int32Ty, Kind)};
   auto Hints = getBranchHints(ValueToReplace, IRB);
-  Args.insert(Args.end(), Hints.begin(), Hints.end());
+  Args.append(Hints.begin(), Hints.end());
+  Args.append({IRB.getInt32(0), Constant::getNullValue(PtrTy)});
   if (isa<PointerType>(AccessTy) && AccessTy->getPointerAddressSpace())
     AccessTy = AccessTy->getPointerTo();
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
@@ -885,11 +1277,13 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
   for (Type *Ty : Types) {
     InputGenMemoryAccessCallback[Ty] = M.getOrInsertFunction(
         Prefix + "access_" + ::getTypeName(Ty), VoidTy, PtrTy, Int64Ty, Int32Ty,
-        PtrTy, Int32Ty, PtrTy, Int32Ty);
-    StubValueGenCallback[Ty] = M.getOrInsertFunction(
-        Prefix + "get_" + ::getTypeName(Ty), Ty, PtrTy, Int32Ty);
-    ArgGenCallback[Ty] = M.getOrInsertFunction(
-        Prefix + "arg_" + ::getTypeName(Ty), Ty, PtrTy, Int32Ty);
+        PtrTy, Int32Ty, PtrTy, Int32Ty, Int32Ty, PtrTy);
+    StubValueGenCallback[Ty] =
+        M.getOrInsertFunction(Prefix + "get_" + ::getTypeName(Ty), Ty, PtrTy,
+                              Int32Ty, Int32Ty, PtrTy);
+    ArgGenCallback[Ty] =
+        M.getOrInsertFunction(Prefix + "arg_" + ::getTypeName(Ty), Ty, PtrTy,
+                              Int32Ty, Int32Ty, PtrTy);
   }
 
   InputGenMemmove =
@@ -985,7 +1379,7 @@ Function &InputGenInstrumenter::createFunctionPtrStub(Module &M, CallBase &CB) {
   if (auto It = find_if(M, IsEquivalentStub); It != M.end())
     return *It;
   auto *F = Function::Create(
-      FT, GlobalValue::WeakAnyLinkage,
+      FT, GlobalValue::WeakODRLinkage,
       "__inputgen_fpstub_" + std::to_string(StubNameCounter++), M);
   F->setCallingConv(CB.getCallingConv());
   stubDeclaration(M, *F);
@@ -997,7 +1391,7 @@ Function &InputGenInstrumenter::createFunctionPtrStub(Module &M, CallBase &CB) {
 }
 
 void InputGenInstrumenter::stubDeclaration(Module &M, Function &F) {
-  F.setLinkage(GlobalValue::WeakAnyLinkage);
+  F.setLinkage(GlobalValue::InternalLinkage);
   F.setMetadata(LLVMContext::MD_dbg, nullptr);
 
   auto *EntryBB = BasicBlock::Create(*Ctx, "entry", &F);
@@ -1247,6 +1641,7 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
       &AAPotentialConstantValues::ID,
       &AAUnderlyingObjects::ID,
       &AAValueConstantRange::ID,
+      &AABranchHints::ID,
   });
   // clang-format on
 
@@ -1257,8 +1652,24 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
   AC.UseLiveness = false;
   AC.DefaultInitializeLiveInternals = false;
   AC.IsClosedWorldModule = true;
-  AC.InitializationCallback = [](Attributor &A, const Function &F) {
+  static int X = 0;
+  AABranchHints::CVIFnMapTy CVIFnMap;
+  AABranchHints::InputMapTy InputMap;
+  AABranchHints::InitializerMapTy InitializerMap;
+  AC.InitializationCallback = [&](Attributor &A, const Function &F) {
     for (auto &I : instructions(F)) {
+      if (auto *BI = dyn_cast<BranchInst>(&I)) {
+        if (Mode == IGInstrumentationModeTy::IG_Generate && ClUseCVIs &&
+            BI->isConditional()) {
+          // if (X++ > 0)
+          //   continue;
+          auto *AA = new (A.Allocator)
+              AABranchHints(IRPosition::value(*BI->getCondition()), A, CVIFnMap,
+                            InputMap, InitializerMap);
+          A.registerAA(*AA);
+        }
+        continue;
+      }
       if (auto *CB = dyn_cast<CallBase>(&I)) {
         if (CB->isIndirectCall()) {
           A.getOrCreateAAFor<AAPotentialValues>(
@@ -1266,6 +1677,7 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
           LLVM_DEBUG(dbgs() << "CB: " << *CB << " in "
                             << CB->getCaller()->getName() << '\n');
         }
+        continue;
       }
     }
   };
@@ -1273,7 +1685,7 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
       [&](Attributor &, const AbstractAttribute &AA, CallBase &CB,
           Function &Callee) { return false; };
   AC.IPOAmendableCB = [](const Function &F) {
-    return !F.isDeclaration() || F.hasWeakAnyLinkage();
+    return !F.isDeclaration() || F.hasWeakAnyLinkage() || F.hasLocalLinkage();
   };
 
   Attributor A(Functions, InfoCache, AC);
@@ -1297,7 +1709,7 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
 
     if (A.getAssumedSimplifiedValues(
             IRPosition::value(*Call->getCalledOperand(), Call), nullptr, Values,
-            AA::ValueScope::AnyScope, UsedAssumedInformation)) {
+            AA::ValueScope::Interprocedural, UsedAssumedInformation)) {
       for (auto &VAC : Values) {
         auto *V = VAC.getValue();
         LLVM_DEBUG(dbgs() << "Value ";
@@ -1792,9 +2204,10 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
       IRB.CreateIntrinsic(VoidTy, Intrinsic::trap, {});
       return UndefValue::get(T);
     } else {
-      return IRB.CreateAddrSpaceCast(
-          IRB.CreateCall(Fn, getBranchHints(ValueToReplace, IRB, VMap)),
-          OrigTy);
+      auto Hints = getBranchHints(ValueToReplace, IRB, VMap);
+      SmallVector<Value *, 4> Args(Hints.begin(), Hints.end());
+      Args.append({IRB.getInt32(0), Constant::getNullValue(PtrTy)});
+      return IRB.CreateAddrSpaceCast(IRB.CreateCall(Fn, Args), OrigTy);
     }
   }
 }
