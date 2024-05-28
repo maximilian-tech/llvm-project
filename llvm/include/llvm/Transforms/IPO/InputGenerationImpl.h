@@ -79,9 +79,9 @@ struct InterestingMemoryAccess {
 class InputGenInstrumenter {
 public:
   InputGenInstrumenter(Module &M, AnalysisManager<Module> &MAM,
-                       IGInstrumentationModeTy Mode,
+                       TargetLibraryInfo &TLI, IGInstrumentationModeTy Mode,
                        bool InstrumentedForCoverage)
-      : Mode(Mode), MAM(MAM), M(M),
+      : Mode(Mode), MAM(MAM), M(M), TLI(TLI),
         InstrumentedForCoverage(InstrumentedForCoverage) {
     Ctx = &(M.getContext());
     PtrTy = PointerType::getUnqual(*Ctx);
@@ -108,6 +108,7 @@ public:
   std::array<Value *, 2> getBranchHints(Value *V, IRBuilderBase &IRB,
                                         ValueToValueMapTy *VMap = nullptr);
   std::array<Value *, 2> getEmptyBranchHints();
+  void declareProbeStackFuncs(Module &M);
   void instrumentCmp(ICmpInst *Cmp);
   void instrumentUnreachable(UnreachableInst *Unreachable);
   void instrumentMop(const InterestingMemoryAccess &Access,
@@ -181,11 +182,13 @@ public:
 
   bool shouldPreserveFuncName(Function &F, TargetLibraryInfo &TLI);
   bool shouldNotStubFunc(Function &F, TargetLibraryInfo &TLI);
+  bool shouldNotStubFunc(StringRef Name, TargetLibraryInfo &TLI);
   bool shouldPreserveGVName(GlobalVariable &GV);
   bool shouldNotStubGV(GlobalVariable &GV);
 
 private:
   Module &M;
+  TargetLibraryInfo &TLI;
 
   CallbackCollectionTy InputGenMemoryAccessCallback;
   CallbackCollectionTy StubValueGenCallback;
@@ -208,11 +211,10 @@ public:
   ModuleInputGenInstrumenter(Module &M, AnalysisManager<Module> &AM,
                              IGInstrumentationModeTy Mode,
                              bool InstrumentedForCoverage)
-      : IGI(M, AM, Mode, InstrumentedForCoverage) {
-    TargetTriple = Triple(M.getTargetTriple());
-    TLII.reset(new TargetLibraryInfoImpl(TargetTriple));
-    TLI.reset(new TargetLibraryInfo(*TLII));
-  }
+      : TargetTriple(Triple(M.getTargetTriple())),
+        TLII(new TargetLibraryInfoImpl(TargetTriple)),
+        TLI(new TargetLibraryInfo(*TLII)),
+        IGI(M, AM, *TLI, Mode, InstrumentedForCoverage) {}
 
   void renameGlobals(Module &M, TargetLibraryInfo &TLI);
   bool instrumentClEntryPoint(Module &);

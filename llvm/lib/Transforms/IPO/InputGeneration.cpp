@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/InputGeneration.h"
+#include "llvm-c/Core.h"
 #include "llvm/ADT/EnumeratedArray.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -194,17 +195,21 @@ bool InputGenInstrumenter::shouldPreserveGVName(GlobalVariable &GV) {
   return shouldNotStubGV(GV);
 }
 
-bool InputGenInstrumenter::shouldNotStubFunc(Function &F,
+bool InputGenInstrumenter::shouldNotStubFunc(StringRef Name,
                                              TargetLibraryInfo &TLI) {
-  // TODO Maybe provide a way for the user to specify the allowed external
-  // functions
-  return StringSwitch<bool>(F.getName())
+  return StringSwitch<bool>(Name)
       .Case("printf", true)
       .Case("puts", true)
       .Case("malloc", true)
       .Case("free", true)
       .Case("__cxa_throw", true)
       .Default(false);
+}
+bool InputGenInstrumenter::shouldNotStubFunc(Function &F,
+                                             TargetLibraryInfo &TLI) {
+  // TODO Maybe provide a way for the user to specify the allowed external
+  // functions
+  return shouldNotStubFunc(F.getName(), TLI);
 }
 
 bool InputGenInstrumenter::shouldPreserveFuncName(Function &F,
@@ -665,6 +670,8 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
 
   IGI.initializeCallbacks(M);
 
+  IGI.declareProbeStackFuncs(M);
+
   switch (IGI.Mode) {
   case IG_Run:
   case IG_Generate:
@@ -816,6 +823,51 @@ bool ModuleInputGenInstrumenter::instrumentFunctionPtrs(Module &M) {
   IGI.provideFunctionPtrGlobals(M);
 
   return true;
+}
+
+// We need to declare the probe stack functions as they may need to be stubbed.
+// They may only be materialized in later passes and we may miss them otherwise.
+void InputGenInstrumenter::declareProbeStackFuncs(Module &M) {
+  SmallSetVector<StringRef, 1> ToAdd;
+  auto AddName = [&](StringRef Name, auto Callback) {
+    // Not a function name
+    if (Name == "inline_asm")
+      return;
+    if (!shouldNotStubFunc(Name, TLI)) {
+      if (!M.getFunction(Name))
+        ToAdd.insert(Name);
+      Callback();
+    }
+  };
+  if (const auto *PS =
+          dyn_cast_or_null<MDString>(M.getModuleFlag("probe-stack"))) {
+    auto Name = PS->getString();
+    AddName(Name, [&]() {
+      Metadata *Val = MDString::get(
+          M.getContext(),
+          std::string("__inputgen_renamed_" + Name.str()).c_str());
+      M.setModuleFlag(Module::ModFlagBehavior::Override, "probe-stack", Val);
+    });
+  }
+  for (Function &F : M) {
+    if (!F.hasFnAttribute("probe-stack"))
+      continue;
+
+    auto Attr = F.getFnAttribute("probe-stack");
+    auto Name = Attr.getValueAsString();
+    AddName(Name, [&]() {
+      F.addFnAttr("probe-stack",
+                  std::string("__inputgen_renamed_" + Name.str()).c_str());
+    });
+  }
+
+  SmallVector<GlobalValue *, 1> Added;
+  for (auto Name : ToAdd)
+    Added.push_back(
+        cast<Function>(M.getOrInsertFunction(
+                            Name, FunctionType::get(VoidTy, /*isVarArg=*/false))
+                           .getCallee()));
+  appendToUsed(M, Added);
 }
 
 void InputGenInstrumenter::initializeCallbacks(Module &M) {
