@@ -1656,16 +1656,19 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
   AABranchHints::CVIFnMapTy CVIFnMap;
   AABranchHints::InputMapTy InputMap;
   AABranchHints::InitializerMapTy InitializerMap;
+  SmallPtrSet<Value *, 32> SeenConditions;
   AC.InitializationCallback = [&](Attributor &A, const Function &F) {
     for (auto &I : instructions(F)) {
       if (auto *BI = dyn_cast<BranchInst>(&I)) {
         if (Mode == IGInstrumentationModeTy::IG_Generate && ClUseCVIs &&
             BI->isConditional()) {
+          Value &Cond = *BI->getCondition();
+          if (!SeenConditions.insert(&Cond).second)
+            continue;
           // if (X++ > 0)
           //   continue;
-          auto *AA = new (A.Allocator)
-              AABranchHints(IRPosition::value(*BI->getCondition()), A, CVIFnMap,
-                            InputMap, InitializerMap);
+          auto *AA = new (A.Allocator) AABranchHints(
+              IRPosition::value(Cond), A, CVIFnMap, InputMap, InitializerMap);
           A.registerAA(*AA);
         }
         continue;
