@@ -175,8 +175,14 @@ struct CondValueInfo {
   SmallSetVector<Value *, 16> LeafValues;
   SmallVector<Type *> InputTypes;
 
-  CondValueInfo(Attributor &A, AA::ValueAndContext VAC, AbstractAttribute &AA)
-      : A(A), VAC(VAC) {
+  using VAC2CVIMapTy = DenseMap<AA::ValueAndContext, CondValueInfo *>;
+  VAC2CVIMapTy &V2C;
+
+  CondValueInfo(Attributor &A, AA::ValueAndContext VAC, AbstractAttribute &AA,
+                VAC2CVIMapTy &V2C, bool &Failure)
+      : A(A), VAC(VAC), V2C(V2C) {
+    V2C[VAC] = this;
+
     SmallPtrSet<Value *, 16> Visited;
     SmallVector<Value *> Worklist;
     Worklist.push_back(VAC.getValue());
@@ -224,7 +230,13 @@ struct CondValueInfo {
           ChildCondValueInfosMap[V];
       InputTypes.push_back(V->getType());
       for (auto &VAC : Values) {
-        ChildCondValueInfos.push_back(new CondValueInfo(A, VAC, AA));
+        if (auto *CVI = V2C.lookup(VAC)) {
+          // TODO:
+          Failure = true;
+          return;
+        }
+        ChildCondValueInfos.push_back(
+            new CondValueInfo(A, VAC, AA, V2C, Failure));
       }
     }
   }
@@ -290,7 +302,12 @@ struct AABranchHints : public StateWrapper<BooleanState, AbstractAttribute> {
 
   /// See AbstractAttribute::updateImpl(...).
   ChangeStatus updateImpl(Attributor &A) override {
-    CondValueInfo CVI(A, {getAssociatedValue(), getCtxI()}, *this);
+    bool Failure = false;
+    CondValueInfo::VAC2CVIMapTy V2C;
+    CondValueInfo CVI(A, {getAssociatedValue(), getCtxI()}, *this, V2C,
+                      Failure);
+    if (Failure)
+      return indicatePessimisticFixpoint();
     const auto &DL = A.getDataLayout();
     for (auto *Ty : CVI.InputTypes) {
       if (DL.getTypeStoreSize(Ty) > 8)
@@ -303,7 +320,12 @@ struct AABranchHints : public StateWrapper<BooleanState, AbstractAttribute> {
   ChangeStatus manifest(Attributor &A) override {
     bool Changed = false;
 
-    CondValueInfo CVI(A, {getAssociatedValue(), getCtxI()}, *this);
+    bool Failure = false;
+    CondValueInfo::VAC2CVIMapTy V2C;
+    CondValueInfo CVI(A, {getAssociatedValue(), getCtxI()}, *this, V2C,
+                      Failure);
+    if (Failure)
+      return indicatePessimisticFixpoint();
 
     bool HasInterestingInput = false;
     SmallVector<CondValueInfo *> Worklist;

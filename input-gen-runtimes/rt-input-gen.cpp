@@ -1220,7 +1220,9 @@ void __inputgen_access_fp(VoidPtrTy Ptr, int32_t Size, VoidPtrTy Base,
   // return an error if the function ptr is not in the potential callee list.
   if (std::find(PotentialFPs, PotentialFPs + N,
                 *reinterpret_cast<VoidPtrTy *>(Ptr)) == PotentialFPs + N) {
-    std::cerr << "Loaded Value is not a valid function pointer." << std::endl;
+    std::cerr << "Loaded Value is not a valid function pointer, got: "
+              << (void *)(*reinterpret_cast<VoidPtrTy *>(Ptr)) << " @ "
+              << (void *)Ptr << " not one of " << N << std::endl;
     exit(13);
   }
 }
