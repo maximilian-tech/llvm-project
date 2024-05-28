@@ -48,6 +48,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Type.h"
@@ -72,6 +73,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1087,8 +1089,7 @@ void InputGenInstrumenter::removeTokenFunctions(Module &M) {
 }
 
 void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
-  SetVector<Function *> Functions;
-  DenseMap<CallBase *, SetVector<Function *>> CallCandidates;
+  SetVector<CallBase *> Calls;
 
   FunctionAnalysisManager &FAM =
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
@@ -1097,6 +1098,8 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
   CallGraphUpdater CGUpdater;
   BumpPtrAllocator Allocator;
   InformationCache InfoCache(M, AG, Allocator, nullptr);
+
+  SetVector<Function *> Functions;
   for (Function &F : M)
     Functions.insert(&F);
 
@@ -1109,38 +1112,21 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
   AC.UseLiveness = false;
   AC.DefaultInitializeLiveInternals = false;
   AC.IsClosedWorldModule = true;
-  AC.InitializationCallback = [&](Attributor &A, const Function &F) {
+  AC.InitializationCallback = [&Calls](Attributor &A, const Function &F) {
     for (auto &I : instructions(F)) {
       if (auto *CB = dyn_cast<CallBase>(&I)) {
         if (CB->isIndirectCall()) {
           // Insert the CB
-          CallCandidates[const_cast<CallBase *>(CB)];
           A.getOrCreateAAFor<AAIndirectCallInfo>(
               IRPosition::callsite_function(*CB));
+          Calls.insert(const_cast<CallBase *>(CB));
         }
       }
     }
   };
   AC.IndirectCalleeSpecializationCallback =
       [&](Attributor &, const AbstractAttribute &AA, CallBase &CB,
-          Function &Callee) {
-        LLVM_DEBUG(dbgs() << "spec candidate: " << CB << " calls "
-                          << Callee.getName() << " in "
-                          << CB.getCaller()->getName() << '\n');
-        // Initialize with empty list
-        auto &CBList = CallCandidates[&CB];
-        if (CB.getFunctionType() == Callee.getFunctionType() &&
-            CB.getFunction() != &Callee) {
-          SmallVector<ABIAttrs> CBABIInfo, FnABIInfo;
-          collectABIInfo(Callee, FnABIInfo);
-          collectABIInfo(CB, CBABIInfo);
-          if (CBABIInfo == FnABIInfo)
-            CBList.insert(&Callee);
-          return false;
-        }
-        LLVM_DEBUG(dbgs() << "ignoring\n");
-        return false;
-      };
+          Function &Callee) { return false; };
 
   Attributor A(Functions, InfoCache, AC);
   for (Function &F : M)
@@ -1163,18 +1149,39 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
     return false;
   };
 
-  for (auto &[Call, Candidates] : CallCandidates) {
-    auto *F = Call->getCaller();
+  auto CandidatesFromCalleeMD = [&](CallBase &CB) {
+    SmallVector<Function *> Callees;
+    if (auto *CalleesMD = CB.getMetadata(LLVMContext::MD_callees)) {
+      for (auto &CalleeMD : CalleesMD->operands()) {
+        auto *CalleeAsVMD = cast<ValueAsMetadata>(CalleeMD)->getValue();
+        auto *Callee = cast<Function>(CalleeAsVMD);
+        if (CB.getFunctionType() == Callee->getFunctionType() &&
+            CB.getFunction() != Callee) {
+          SmallVector<ABIAttrs> CBABIInfo, FnABIInfo;
+          collectABIInfo(*Callee, FnABIInfo);
+          collectABIInfo(CB, CBABIInfo);
+          if (CBABIInfo == FnABIInfo)
+            Callees.push_back(Callee);
+        }
+      }
+    }
+    return Callees;
+  };
+
+  for (auto *Call : Calls) {
+    auto *F = Call->getFunction();
     LLVM_DEBUG(dbgs() << *Call << " in function " << F->getName() << "\n");
+
+    auto Candidates = CandidatesFromCalleeMD(*Call);
 
     for (auto *Candidate : Candidates) {
       LLVM_DEBUG(dbgs() << "    " << Candidate->getName() << '\n');
     }
 
-    Candidates.insert(&createFunctionPtrStub(M, *Call));
+    Candidates.push_back(&createFunctionPtrStub(M, *Call));
 
     MDBuilder Builder(F->getContext());
-    auto *FilteredCallees = Builder.createCallees(Candidates.getArrayRef());
+    auto *FilteredCallees = Builder.createCallees(Candidates);
     Call->setMetadata(LLVMContext::MD_callees, FilteredCallees);
 
     // todo: well, this only works if the argument is directly called, not
@@ -1205,7 +1212,6 @@ void InputGenInstrumenter::gatherFunctionPtrCallees(Module &M) {
 }
 
 void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
-  SetVector<Function *> Functions;
 
   FunctionAnalysisManager &FAM =
       MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
@@ -1214,9 +1220,12 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
   CallGraphUpdater CGUpdater;
   BumpPtrAllocator Allocator;
   InformationCache InfoCache(M, AG, Allocator, nullptr);
+
+  SetVector<Function *> Functions;
   for (Function &F : M)
     Functions.insert(&F);
 
+  // clang-format off
   DenseSet<const char *> Allowed({
       &AAPotentialValues::ID,
       &AACallEdges::ID,
@@ -1239,6 +1248,7 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
       &AAUnderlyingObjects::ID,
       &AAValueConstantRange::ID,
   });
+  // clang-format on
 
   AttributorConfig AC(CGUpdater);
   AC.IsModulePass = true;
@@ -1792,7 +1802,7 @@ Value *InputGenInstrumenter::constructTypeUsingCallbacks(
 Value *InputGenInstrumenter::constructFpFromPotentialCallees(
     const CallBase &Caller, Value &V, IRBuilderBase &IRB,
     SetVector<Instruction *> &ToDelete) {
-  LLVM_DEBUG(dbgs() << V << " for "
+  LLVM_DEBUG(dbgs() << "get suitable FP " << V << " for "
                     << IRB.GetInsertBlock()->getParent()->getName() << '\n');
   auto &M = *IRB.GetInsertBlock()->getModule();
   SetVector<Constant *> CalleeSet;
@@ -1803,7 +1813,6 @@ Value *InputGenInstrumenter::constructFpFromPotentialCallees(
       auto *Callee = cast<Function>(CalleeAsVMD);
 
       CalleeSet.insert(Callee);
-      LLVM_DEBUG(dbgs() << Callee->getName() << '\n');
     }
   }
 
