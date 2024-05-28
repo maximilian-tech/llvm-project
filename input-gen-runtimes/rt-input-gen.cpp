@@ -1191,6 +1191,7 @@ void __inputgen_unreachable(int32_t No, const char *Name) {
   printf("Reached unreachable %i due to '%s'\n", No, Name ? Name : "n/a");
   exit(UnreachableExitStatus);
 }
+void __inputgen_override_free(void *P) {}
 }
 
 std::vector<ObjCmpInfoTy> ObjCmps;

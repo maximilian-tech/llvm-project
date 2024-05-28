@@ -91,6 +91,7 @@ constexpr char FilenameVar[] = "profile_filename";
 static const std::string InputGenCallbackPrefix = "__inputgen_";
 static const std::string InputRunCallbackPrefix = "__inputrun_";
 static const std::string RecordingCallbackPrefix = "__record_";
+static constexpr char OverrideFreeName[] = "__inputgen_override_free";
 
 static std::string InputGenOutputFilename = "input_gen_%{fn}_%{uuid}.c";
 
@@ -201,8 +202,8 @@ bool InputGenInstrumenter::shouldNotStubFunc(StringRef Name,
       .Case("printf", true)
       .Case("puts", true)
       .Case("malloc", true)
-      .Case("free", true)
       .Case("__cxa_throw", true)
+      .Case(OverrideFreeName, true)
       .Default(false);
 }
 bool InputGenInstrumenter::shouldNotStubFunc(Function &F,
@@ -671,6 +672,9 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
   IGI.initializeCallbacks(M);
 
   IGI.declareProbeStackFuncs(M);
+
+  if (Function *Free = M.getFunction("free"))
+    Free->setName(OverrideFreeName);
 
   switch (IGI.Mode) {
   case IG_Run:
