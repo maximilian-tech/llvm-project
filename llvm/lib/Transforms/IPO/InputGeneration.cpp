@@ -1882,6 +1882,12 @@ void InputGenInstrumenter::createGenerationEntryPoint(Function &F,
     VMap[&Arg] = Args.back();
   }
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
+
+  // Do not inline the function. We can safely remove the always inline because
+  // optimization passes up to this point will have used that attribute already.
+  Ret->setIsNoInline();
+  F.removeFnAttr(Attribute::AlwaysInline);
+
   SmallVector<ABIAttrs> FnABIInfo;
   collectABIInfo(F, FnABIInfo);
   Ret->setCallingConv(F.getCallingConv());
@@ -2002,6 +2008,12 @@ void InputGenInstrumenter::createRunEntryPoint(Function &F, bool UniqName) {
     I->eraseFromParent();
 
   auto *Ret = IRB.CreateCall(FunctionCallee(F.getFunctionType(), &F), Args, "");
+
+  // Do not inline the function. We can safely remove the always inline because
+  // optimization passes up to this point will have used that attribute already.
+  Ret->setIsNoInline();
+  F.removeFnAttr(Attribute::AlwaysInline);
+
   SmallVector<ABIAttrs> FnABIInfo;
   collectABIInfo(F, FnABIInfo);
   Ret->setCallingConv(F.getCallingConv());
