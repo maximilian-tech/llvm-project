@@ -3,6 +3,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
@@ -459,10 +460,12 @@ int main(int argc, char **argv) {
   InputGenOrchestration IGO(*M);
 
   if (ClFunction.getNumOccurrences() > 0) {
+    StripDebugInfo(*M);
     stripUnknownOperandBundles(*M);
     IGO.genFunctionForAllRuntimes(ClFunction, argv[0]);
   } else {
     IGO.dumpFunctions();
+    StripDebugInfo(*M);
     stripUnknownOperandBundles(*M);
     IGO.genAllFunctionForAllRuntimes(argv[0]);
   }
