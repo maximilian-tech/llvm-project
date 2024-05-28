@@ -2,6 +2,7 @@
 #include <array>
 #include <bitset>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -155,26 +156,54 @@ struct CVIHandlerTy {
     int32_t BestHits = 0;
     T BestValue = DefaultValue;
 
-    auto Eval = [&](T V, int32_t &VHits) {
+    auto Eval = [&](T V) {
+      int32_t VHits = 0;
       for (auto &It : ReadyDescriptors) {
         if (evaluate(*It.first, pun<uintptr_t>((T)V), TgtBranch))
           VHits += (It.second == TgtCVI) ? 100 : 1;
       }
-    };
-
-    for (int32_t V = -256; V < 257; ++V) {
-      int32_t VHits = 0;
-      Eval((T)V, VHits);
-      if constexpr (std::is_floating_point<T>::value) {
-        Eval((T)1 / (T)0, VHits);
-        Eval((T)0 / (T)0, VHits);
-        Eval(-1 * (T)0, VHits);
-        Eval((T)1 / 3, VHits);
-      }
       if (VHits <= BestHits)
-        continue;
+        return;
+      INPUTGEN_DEBUG(printf("New best %lu : %i > %i\n", (long unsigned)V, VHits,
+                            BestHits));
       BestHits = VHits;
       BestValue = V;
+    };
+
+    Eval(DefaultValue);
+
+    if constexpr (std::is_pointer<T>::value) {
+      Eval(nullptr);
+    }
+
+    if constexpr (std::is_integral<T>::value) {
+      Eval(2);
+      Eval(1);
+      Eval(0);
+    } else if constexpr (std::is_floating_point<T>::value) {
+      Eval(std::numeric_limits<T>::round_error());
+      Eval(std::numeric_limits<T>::denorm_min());
+      Eval(std::numeric_limits<T>::epsilon());
+      Eval(std::numeric_limits<T>::lowest());
+      Eval(std::numeric_limits<T>::infinity());
+      Eval(std::numeric_limits<T>::min());
+      Eval(std::numeric_limits<T>::max());
+      Eval(std::numeric_limits<T>::quiet_NaN());
+    }
+
+    if constexpr (std::is_integral<T>::value ||
+                  std::is_floating_point<T>::value) {
+
+      for (int32_t V = -256; V < 257; ++V) {
+        Eval((T)V);
+      }
+    }
+
+    if constexpr (std::is_integral<T>::value) {
+      Eval((T)1024);
+      Eval((T)1025);
+      Eval(std::numeric_limits<T>::min());
+      Eval(std::numeric_limits<T>::max());
     }
 
     if (!HasMultiArgInputs || BestValue == DefaultValue)
@@ -955,6 +984,15 @@ struct InputGenRTTy {
   VoidPtrTy getNewValue<VoidPtrTy>(BranchHint *BHs, int32_t BHSize,
                                    int32_t CVISize, void *CVIs) {
     NumNewValues++;
+    if (CVISize) {
+      auto Obj = getNewPtr(UnknownSize);
+      INPUTGEN_DEBUG(
+          printf("New ptr: Obj #%lu at output ptr %p :: checking CVI\n",
+                 Obj.Idx, (void *)Obj.Ptr));
+      return CVIHandler.generateValue<VoidPtrTy>(CVISize, CVIs, Obj.Ptr,
+                                                 rand() % 2, rand() % CVISize);
+    }
+
     // We let the ptr cmp retry handle null pointers if it is enabled
     if (InputGenConf.EnablePtrCmpRetry || (rand() % NullPtrProbability)) {
       auto Obj = getNewPtr(UnknownSize);
