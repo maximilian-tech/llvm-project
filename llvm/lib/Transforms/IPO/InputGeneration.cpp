@@ -549,6 +549,10 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
     int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object,
     Value *ValueToReplace) {
 
+  if (auto *GV = dyn_cast<GlobalVariable>(Addr);
+      GV && isLibCGlobal(GV->getName()))
+    return;
+
   Value *Val = ConstantInt::getNullValue(Int64Ty);
   if (V) {
     // If the value cannot fit in an i64, we need to pass it by reference.
