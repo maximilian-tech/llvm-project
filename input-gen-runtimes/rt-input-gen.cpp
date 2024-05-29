@@ -1071,11 +1071,12 @@ void __inputgen_access_fp(VoidPtrTy Ptr, int32_t Size, VoidPtrTy Base,
     getInputGenRT().registerFunctionPtrAccess(Ptr, Size, PotentialFPs, N);
     return;
   }
-  // return an error if the function ptr is not in the potential callee list.
+  // we need a fp here, but it is no fp, yet. So we probably failed to instrument the source thus far.
+  // replace with function pointer to do sth slightly useful.
+  // Currently, realistically, not usable from run.
   if (std::find(PotentialFPs, PotentialFPs + N,
                 *reinterpret_cast<VoidPtrTy *>(Ptr)) == PotentialFPs + N) {
-    std::cerr << "Loaded Value is not a valid function pointer." << std::endl;
-    exit(13);
+    getInputGenRT().registerFunctionPtrAccess(Ptr, Size, PotentialFPs, N);
   }
 }
 
