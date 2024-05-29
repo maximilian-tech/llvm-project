@@ -1329,7 +1329,10 @@ void InputGenInstrumenter::instrumentFunctionPtrSources(Module &M) {
         if (auto *NewV =
                 constructFpFromPotentialCallees(*Call, *V, IRB, ToDelete)) {
           V->replaceAllUsesWith(NewV);
-          if (auto *VI = dyn_cast<Instruction>(V))
+          auto *VI = dyn_cast<Instruction>(V);
+          // Leave invoke insts intact for now. TODO once we start simulating
+          // throwing we should tweak this
+          if (VI && !isa<InvokeInst>(VI))
             ToDelete.insert(VI);
         }
       }
