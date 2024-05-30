@@ -204,6 +204,7 @@ bool InputGenInstrumenter::shouldNotStubFunc(StringRef Name,
       .Case("printf", true)
       .Case("puts", true)
       .Case("malloc", true)
+      .Case("calloc", true)
       .Case("__cxa_throw", true)
       .Case(OverrideFreeName, true)
       .Default(false);
