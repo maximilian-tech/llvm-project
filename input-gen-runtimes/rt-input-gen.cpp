@@ -2,6 +2,7 @@
 #include <array>
 #include <bitset>
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -32,7 +33,12 @@
 
 namespace {
 int VERBOSE = 0;
-}
+int TIMING = 0;
+
+INPUTGEN_TIMER_DEFINE(IGInitialization);
+INPUTGEN_TIMER_DEFINE(IGGen);
+INPUTGEN_TIMER_DEFINE(IGDump);
+} // namespace
 
 extern "C" {
 extern VoidPtrTy __inputgen_function_pointers[];
@@ -409,7 +415,7 @@ struct InputGenRTTy {
                           OA.MaxObjectSize, OA.MaxObjectNum));
 
     OutputObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
-    DefaultIntDistrib = std::uniform_int_distribution<>(0, 10);
+    DefaultIntDistrib = std::uniform_int_distribution<>(0, 32);
     DefaultFloatDistrib = std::uniform_real_distribution<>(0, 10);
   }
   ~InputGenRTTy() {}
@@ -1198,6 +1204,7 @@ std::vector<ObjCmpInfoTy> ObjCmps;
 
 int main(int argc, char **argv) {
   VERBOSE = (bool)getenv("VERBOSE");
+  TIMING = (bool)getenv("TIMING");
 
   uint8_t Tmp;
   VoidPtrTy StackPtr = &Tmp;
@@ -1236,6 +1243,8 @@ int main(int argc, char **argv) {
   std::cout << "Will generate " << Size << " inputs for function " << FuncName
             << " " << FuncIdent << std::endl;
 
+  INPUTGEN_TIMER_START(IGInitialization);
+
   DynLibHandle = dlopen(NULL, RTLD_NOW);
   if (!DynLibHandle) {
     std::cout << "Could not dyn load binary" << std::endl;
@@ -1261,8 +1270,12 @@ int main(int argc, char **argv) {
   std::function<void(ObjCmpInfoTy)> CmpInfoCallback;
 
   std::atexit([]() {
+    INPUTGEN_TIMER_END(IGGen);
+
     if (InputGenRT) {
+      INPUTGEN_TIMER_START(IGDump);
       InputGenRT->report();
+      INPUTGEN_TIMER_END(IGDump);
       delete InputGenRT;
       InputGenRT = nullptr;
     }
@@ -1274,6 +1287,8 @@ int main(int argc, char **argv) {
     InputGenRT =
         new InputGenRTTy(argv[0], OutputDir, FuncIdent.c_str(), StackPtr, I,
                          InputGenConf, ObjCmps, &CmpInfoCallback);
+    INPUTGEN_TIMER_END(IGInitialization);
+    INPUTGEN_TIMER_START(IGGen);
     EntryFn(argc, argv);
     exit(0);
   };

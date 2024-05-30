@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -17,7 +18,12 @@
 
 namespace {
 int VERBOSE = 0;
-}
+int TIMING = 0;
+
+INPUTGEN_TIMER_DEFINE(IRInitialization);
+INPUTGEN_TIMER_DEFINE(IRRun);
+
+} // namespace
 
 struct ObjectTy {
   VoidPtrTy Start;
@@ -107,6 +113,9 @@ void __inputgen_override_free(void *P) {}
 }
 
 int main(int argc, char **argv) {
+  VERBOSE = (bool)getenv("VERBOSE");
+  TIMING = (bool)getenv("TIMING");
+
   if (argc != 4 && argc != 5 && argc != 2) {
     std::cerr << "Wrong usage." << std::endl;
     return 1;
@@ -135,9 +144,9 @@ int main(int argc, char **argv) {
     }
   }
 
-  VERBOSE = (bool)getenv("VERBOSE");
-
   printf("Replay %s\n", InputName);
+
+  INPUTGEN_TIMER_START(IRInitialization);
 
   std::ifstream Input(InputName, std::ios::in | std::ios::binary);
 
@@ -307,8 +316,11 @@ int main(int argc, char **argv) {
     return 12;
   }
 
+  INPUTGEN_TIMER_END(IRInitialization);
   printf("Run\n");
+  INPUTGEN_TIMER_START(IRRun);
   EntryFn(ccast(ArgsMemory));
+  INPUTGEN_TIMER_END(IRRun);
 
   dlclose(Handle);
 

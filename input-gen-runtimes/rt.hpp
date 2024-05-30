@@ -7,7 +7,8 @@
 
 namespace {
 extern int VERBOSE;
-}
+extern int TIMING;
+} // namespace
 
 #ifndef NDEBUG
 #define INPUTGEN_DEBUG(X)                                                      \
@@ -19,6 +20,28 @@ extern int VERBOSE;
 #else
 #define INPUTGEN_DEBUG(X)
 #endif
+
+#define INPUTGEN_TIMER_DEFINE(Name)                                            \
+  std::chrono::steady_clock::time_point Timer##Name##Begin
+
+#define INPUTGEN_TIMER_START(Name)                                             \
+  do {                                                                         \
+    if (TIMING)                                                                \
+      Timer##Name##Begin = std::chrono::steady_clock::now();                   \
+  } while (0)
+
+#define INPUTGEN_TIMER_END(Name)                                               \
+  do {                                                                         \
+    if (TIMING) {                                                              \
+      std::chrono::steady_clock::time_point Timer##Name##End =                 \
+          std::chrono::steady_clock::now();                                    \
+      std::cout << "Time for " << #Name << ": "                                \
+                << std::chrono::duration_cast<std::chrono::microseconds>(      \
+                       Timer##Name##End - Timer##Name##Begin)                  \
+                       .count()                                                \
+                << std::endl;                                                  \
+    }                                                                          \
+  } while (0)
 
 static constexpr intptr_t ObjAlignment = 16;
 static constexpr intptr_t MaxPrimitiveTypeSize = 16;
