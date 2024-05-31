@@ -402,7 +402,7 @@ static bool getPotentialCopiesOfMemoryValue(
         !(IsLoad ? isAllocationFn(&Obj, TLI) : isNoAliasCall(&Obj))) {
       LLVM_DEBUG(dbgs() << "Underlying object is not supported yet: " << Obj
                         << "\n";);
-      return false;
+      //      return false;
     }
     if (auto *GV = dyn_cast<GlobalVariable>(&Obj))
       if (!GV->hasLocalLinkage() &&
@@ -410,7 +410,7 @@ static bool getPotentialCopiesOfMemoryValue(
         LLVM_DEBUG(dbgs() << "Underlying object is global with external "
                              "linkage, not supported yet: "
                           << Obj << "\n";);
-        return false;
+        //        return false;
       }
 
     bool NullOnly = true;

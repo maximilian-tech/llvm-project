@@ -446,6 +446,8 @@ private:
       auto *IP = isa<Instruction>(V)
                      ? cast<Instruction>(V)->getNextNode()
                      : const_cast<Instruction *>(CVI.VAC.getCtxI());
+      if (isa<PHINode>(IP))
+        IP = &*IP->getParent()->getFirstNonPHIOrDbgOrAlloca();
       const auto &Callee = M.getOrInsertFunction(
           InputGenCallbackPrefix + "define_" + ::getTypeName(Ty), Int32Ty, Ty,
           Int32Ty, PtrTy);

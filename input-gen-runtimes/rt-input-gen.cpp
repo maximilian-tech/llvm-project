@@ -44,7 +44,7 @@ using BranchHint = llvm::inputgen::BranchHint;
 
 static constexpr intptr_t MinObjAllocation = 64;
 static constexpr unsigned NullPtrProbability = 75;
-static constexpr int CmpPtrRetryProbability = 10;
+static constexpr int CmpPtrRetryProbability = 1;
 static constexpr int MaxDeviationFromBranchHint = 10;
 
 template <typename T>
@@ -535,7 +535,10 @@ struct ObjCmpInfoTy {
 struct InputGenConfTy {
   bool EnablePtrCmpRetry;
   bool EnableBranchHints;
+  int NumNullPtrToSkip = 0;
   InputGenConfTy() {
+    if (auto *C = getenv("INPUT_GEN_NUM_NULL_PTR_SKIPS"))
+      NumNullPtrToSkip = atoi(C);
     EnablePtrCmpRetry = !getenv("INPUT_GEN_DISABLE_PTR_CMP_RETRY");
     EnableBranchHints = !getenv("INPUT_GEN_DISABLE_BRANCH_HINTS");
   }
@@ -715,7 +718,7 @@ struct InputGenRTTy {
     assert(IsExistingObj || IsOutsideObjMemory);
     if (IsExistingObj) {
       INPUTGEN_DEBUG(std::cerr << "Access: " << (void *)GlobalPtr << " Obj #"
-                               << Idx << std::endl);
+                               << Idx << " :: " << Objects.size() << std::endl);
       return Objects[Idx].get();
     }
     INPUTGEN_DEBUG(std::cerr << "Access to memory not handled by us: "
@@ -739,9 +742,18 @@ struct InputGenRTTy {
 
     if (A == nullptr && B == nullptr)
       return;
+    if (!ObjA && !ObjB)
+      return;
 
     if (!ObjCmpCallback)
       return;
+
+    if (!A || !B) {
+      if (InputGenConf.NumNullPtrToSkip) {
+        InputGenConf.NumNullPtrToSkip--;
+        return;
+      }
+    }
 
     size_t IdxA = getObjIdx(A, /*AllowNull=*/true);
     size_t IdxB = getObjIdx(B, /*AllowNull=*/true);
@@ -750,7 +762,7 @@ struct InputGenRTTy {
                              << std::endl);
     // Globals cannot alias
     if (std::find(GlobalBundleObjects.begin(), GlobalBundleObjects.end(),
-                  IdxA) != GlobalBundleObjects.end() &&
+                  IdxA) != GlobalBundleObjects.end() ||
         std::find(GlobalBundleObjects.begin(), GlobalBundleObjects.end(),
                   IdxB) != GlobalBundleObjects.end()) {
       INPUTGEN_DEBUG(std::cerr << "Compared globals, ignoring." << std::endl);
@@ -953,16 +965,15 @@ struct InputGenRTTy {
         GenVal = *Interval.getExactValue();
       else if constexpr (std::is_floating_point<T>::value) {
         auto Distrib = std::uniform_real_distribution<T>(Begin, End);
+        assert(Distrib.a() <= Distrib.b());
         GenVal = Distrib(Gen);
       } else if constexpr (std::is_integral<T>::value) {
-        auto Distrib = std::uniform_int_distribution<T>(
-            Interval.BeginKind == OPEN ? Begin + 1 : Begin,
-            Interval.EndKind == OPEN ? End - 1 : End);
+        auto Distrib = std::uniform_int_distribution<T>(Begin, End);
+        assert(Distrib.a() <= Distrib.b());
         GenVal = Distrib(Gen);
       } else if constexpr (std::is_same<T, __int128>::value) {
-        auto Distrib = std::uniform_int_distribution<long long>(
-            Interval.BeginKind == OPEN ? Begin + 1 : Begin,
-            Interval.EndKind == OPEN ? End - 1 : End);
+        auto Distrib = std::uniform_int_distribution<long long>(Begin, End);
+        assert(Distrib.a() <= Distrib.b());
         GenVal = Distrib(Gen);
       } else {
         static_assert(false);
@@ -1020,9 +1031,12 @@ struct InputGenRTTy {
 
   template <typename T>
   T read(VoidPtrTy Ptr, VoidPtrTy Base, uint32_t Size, BranchHint *BHs,
-         int32_t BHSize, int32_t CVISize, void *CVIs) {
+         int32_t BHSize, int32_t CVISize, void *CVIs,
+         bool *RuntimeManaged = nullptr) {
     assert(Ptr);
     ObjectTy *Obj = globalPtrToObj(Ptr);
+    if (RuntimeManaged)
+      *RuntimeManaged = !!Obj;
     if (Obj)
       return Obj->read<T>(OA.globalPtrToLocalPtr(Ptr), Size, BHs, BHSize,
                           CVISize, CVIs);
@@ -1250,8 +1264,12 @@ VoidPtrTy __inputgen_select_fp(VoidPtrTy *PotentialFPs, uint64_t N) {
 
 void __inputgen_access_fp(VoidPtrTy Ptr, int32_t Size, VoidPtrTy Base,
                           VoidPtrTy *PotentialFPs, uint64_t N) {
-  if (!getInputGenRT().read<FunctionPtrTy>(Ptr, Base, Size, /* BHs */ nullptr,
-                                           0, 0, nullptr)) {
+  bool RuntimeManaged = false;
+  FunctionPtrTy FP = getInputGenRT().read<FunctionPtrTy>(
+      Ptr, Base, Size, /* BHs */ nullptr, 0, 0, nullptr, &RuntimeManaged);
+  if (!RuntimeManaged)
+    return;
+  if (!FP) {
     getInputGenRT().registerFunctionPtrAccess(Ptr, Size, PotentialFPs, N);
     return;
   }
@@ -1382,7 +1400,7 @@ void __inputgen_cmp_ptr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
 }
 void __inputgen_unreachable(int32_t No, const char *Name) {
   printf("Reached unreachable %i due to '%s'\n", No, Name ? Name : "n/a");
-  exit(UnreachableExitStatus);
+  exit(0);
 }
 void __inputgen_override_free(void *P) {}
 }

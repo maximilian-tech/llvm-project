@@ -48,6 +48,7 @@ int rand() { return Rand(Gen); }
 
 template <typename T> T getNewValue() {
   static_assert(sizeof(T) <= MaxPrimitiveTypeSize);
+  printf("%i :: %i\n", CurStub, NumStubs);
   assert(CurStub < NumStubs);
   T A;
   memcpy(&A, StubsMemory + CurStub * MaxPrimitiveTypeSize, sizeof(A));
@@ -273,8 +274,11 @@ int main(int argc, char **argv) {
     VoidPtrTy CurMem = ArgsMemory + I * MaxPrimitiveTypeSize;
     Input.read(ccast(CurMem), MaxPrimitiveTypeSize);
     auto IsPtr = readV<int32_t>(Input);
-    INPUTGEN_DEBUG(printf("GenVal #%d : %p\n", I, (void *)ArgsMemory));
-    if (IsPtr)
+    INPUTGEN_DEBUG(printf("GenVal #%d : ", I));
+    for (unsigned J = 0; J < MaxPrimitiveTypeSize; J++)
+      INPUTGEN_DEBUG(printf("%d ", (int)((uint8_t *)CurMem)[J]));
+    INPUTGEN_DEBUG(printf("\n"));
+    if (IsPtr && *reinterpret_cast<VoidPtrTy *>(CurMem))
       RelocatePointer(reinterpret_cast<VoidPtrTy *>(CurMem), "GenVal");
   }
 
