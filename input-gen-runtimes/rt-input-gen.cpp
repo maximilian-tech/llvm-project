@@ -371,10 +371,35 @@ template <typename T> static GenValTy toGenValTy(T A, int32_t IsPtr) {
   return U;
 }
 
-struct ObjCmpInfoTy {
+struct RetryInfoTy {
+  uint64_t RollbackLocation;
+  RetryInfoTy(uint64_t RollbackLocation) : RollbackLocation(RollbackLocation) {}
+  virtual void dump(std::ostream &Stream) const {
+    Stream << "RL " << RollbackLocation << " ";
+  }
+  virtual ~RetryInfoTy() {};
+};
+struct ObjCmpOffsetTy : RetryInfoTy {
   size_t IdxOriginal, IdxOther;
   intptr_t Offset;
-  bool Done = false;
+  ObjCmpOffsetTy(uint64_t RollbackLocation, size_t IdxOriginal, size_t IdxOther,
+                 intptr_t Offset)
+      : RetryInfoTy(RollbackLocation), IdxOriginal(IdxOriginal),
+        IdxOther(IdxOther), Offset(Offset) {}
+  void dump(std::ostream &Stream) const override {
+    RetryInfoTy::dump(Stream);
+    Stream << "ObjCmpOffset " << IdxOriginal << " " << IdxOther << " " << Offset
+           << std::endl;
+  }
+};
+struct ObjCmpNullTy : RetryInfoTy {
+  size_t Idx;
+  ObjCmpNullTy(uint64_t RollbackLocation, size_t Idx)
+      : RetryInfoTy(RollbackLocation), Idx(Idx) {}
+  void dump(std::ostream &Stream) const override {
+    RetryInfoTy::dump(Stream);
+    Stream << "ObjCmpNull " << Idx << std::endl;
+  }
 };
 
 struct InputGenConfTy {
@@ -389,10 +414,11 @@ struct InputGenConfTy {
 struct InputGenRTTy {
   InputGenRTTy(const char *ExecPath, const char *OutputDir,
                const char *FuncIdent, VoidPtrTy StackPtr, int Seed,
-               InputGenConfTy InputGenConf, std::vector<ObjCmpInfoTy> ObjCmps,
-               std::function<void(ObjCmpInfoTy)> *ObjCmpCallback)
-      : InputGenConf(InputGenConf), ObjCmps(ObjCmps),
-        ObjCmpCallback(ObjCmpCallback), StackPtr(StackPtr), Seed(Seed),
+               InputGenConfTy InputGenConf,
+               std::vector<std::unique_ptr<RetryInfoTy>> &RetryInfos,
+               std::function<void(std::unique_ptr<RetryInfoTy>)> *RetryCallback)
+      : InputGenConf(InputGenConf), RetryCallback(RetryCallback),
+        RetryInfos(RetryInfos), StackPtr(StackPtr), Seed(Seed),
         FuncIdent(FuncIdent), OutputDir(OutputDir), ExecPath(ExecPath) {
     Gen.seed(Seed);
     if (this->FuncIdent != "") {
@@ -417,13 +443,22 @@ struct InputGenRTTy {
     OutputObjIdxOffset = OA.globalPtrToObjIdx(OutputMem.AlignedMemory);
     DefaultIntDistrib = std::uniform_int_distribution<>(0, 32);
     DefaultFloatDistrib = std::uniform_real_distribution<>(0, 10);
+
+    UnusedRetryInfo = RetryInfos.begin();
+
+    INPUTGEN_DEBUG({
+      std::cerr << "Got " << RetryInfos.size() << " retry infos." << std::endl;
+      for (auto const &Info : RetryInfos)
+        Info->dump(std::cerr);
+    });
   }
   ~InputGenRTTy() {}
 
   InputGenConfTy InputGenConf;
 
-  std::vector<ObjCmpInfoTy> ObjCmps;
-  std::function<void(ObjCmpInfoTy)> *ObjCmpCallback;
+  std::function<void(std::unique_ptr<RetryInfoTy>)> *RetryCallback;
+  std::vector<std::unique_ptr<RetryInfoTy>> &RetryInfos;
+  std::vector<std::unique_ptr<RetryInfoTy>>::iterator UnusedRetryInfo;
 
   VoidPtrTy StackPtr;
   intptr_t OutputObjIdxOffset;
@@ -492,26 +527,33 @@ struct InputGenRTTy {
   static constexpr uint64_t UnknownSize = -1;
   NewObj getNewPtr(uint64_t Size) {
     size_t Idx = Objects.size();
-    for (auto &ObjCmp : ObjCmps) {
-      if (ObjCmp.Done)
-        continue;
-      if (ObjCmp.IdxOriginal == Idx && ObjCmp.IdxOther == NullPtrIdx) {
-        INPUTGEN_DEBUG(
-            fprintf(stderr, "Generated null pointer for comparison\n"));
-        ObjCmp.Done = true;
-        return {NullPtrIdx, nullptr};
-      }
-      if (ObjCmp.IdxOther == Idx) {
-        // An offset of this object will be compared to ObjCmp.IdxOriginal at
-        // offset ObjCmp.Offset. Make sure that comparison will succeed
-        VoidPtrTy Ptr =
-            OA.localPtrToGlobalPtr(ObjCmp.IdxOriginal + OutputObjIdxOffset,
-                                   OA.getObjBasePtr()) +
-            ObjCmp.Offset;
-        INPUTGEN_DEBUG(printf("Pointer to existing obj #%lu at %p\n",
-                              ObjCmp.IdxOriginal, (void *)Ptr));
-        ObjCmp.Done = true;
-        return {ObjCmp.IdxOriginal, Ptr};
+    if (UnusedRetryInfo != RetryInfos.end()) {
+      RetryInfoTy *ObjCmp = UnusedRetryInfo->get();
+      if (ObjCmpOffsetTy *ObjCmpOffset =
+              dynamic_cast<ObjCmpOffsetTy *>(ObjCmp)) {
+        if (ObjCmpOffset->IdxOther == Idx) {
+          // An offset of this object will be compared to ObjCmp.IdxOriginal at
+          // offset ObjCmp.Offset. Make sure that comparison will succeed
+          VoidPtrTy Ptr = OA.localPtrToGlobalPtr(ObjCmpOffset->IdxOriginal +
+                                                     OutputObjIdxOffset,
+                                                 OA.getObjBasePtr()) +
+                          ObjCmpOffset->Offset;
+          INPUTGEN_DEBUG(printf("Pointer to existing obj #%lu at %p\n",
+                                ObjCmpOffset->IdxOriginal, (void *)Ptr));
+          UnusedRetryInfo++;
+          return {ObjCmpOffset->IdxOriginal, Ptr};
+        }
+      } else if (ObjCmpNullTy *ObjCmpNull =
+                     dynamic_cast<ObjCmpNullTy *>(ObjCmp)) {
+        if (ObjCmpNull->Idx == Idx) {
+          INPUTGEN_DEBUG(printf("Pointer to null instead of object #%lu\n",
+                                ObjCmpNull->Idx));
+          UnusedRetryInfo++;
+          return {NullPtrIdx, nullptr};
+        }
+      } else {
+        INPUTGEN_DEBUG(std::cerr << "Invalid type" << std::endl);
+        abort();
       }
     }
     Objects.push_back(std::make_unique<ObjectTy>(
@@ -583,7 +625,7 @@ struct InputGenRTTy {
     if (A == nullptr && B == nullptr)
       return;
 
-    if (!ObjCmpCallback)
+    if (!RetryCallback)
       return;
 
     size_t IdxA = getObjIdx(A, /*AllowNull=*/true);
@@ -609,16 +651,21 @@ struct InputGenRTTy {
       return;
     }
     if (IdxA != IdxB && ShouldCallback) {
-      if (IdxA > IdxB)
-        std::swap(IdxA, IdxB);
-      INPUTGEN_DEBUG(std::cerr
-                     << "Compared different objects, will retry input gen. "
-                     << IdxA << " " << IdxB << std::endl);
+      if (IdxB == NullPtrIdx) {
+        (*RetryCallback)(std::make_unique<ObjCmpNullTy>(IdxA, IdxA));
+      } else if (IdxA == NullPtrIdx) {
+        (*RetryCallback)(std::make_unique<ObjCmpNullTy>(IdxB, IdxB));
+      } else {
+        if (IdxA > IdxB)
+          std::swap(IdxA, IdxB);
+        INPUTGEN_DEBUG(std::cerr
+                       << "Compared different objects, will retry input gen. "
+                       << IdxA << " " << IdxB << std::endl);
 
-      ObjCmpInfoTy ObjCmp = {
-          IdxA, IdxB, OA.globalPtrToLocalPtr(A) - OA.globalPtrToLocalPtr(B),
-          false};
-      (*ObjCmpCallback)(ObjCmp);
+        (*RetryCallback)(std::make_unique<ObjCmpOffsetTy>(
+            IdxB, IdxA, IdxB,
+            OA.globalPtrToLocalPtr(A) - OA.globalPtrToLocalPtr(B)));
+      }
     }
   }
 
@@ -1209,7 +1256,16 @@ void __inputgen_unreachable(int32_t No, const char *Name) {
 void __inputgen_override_free(void *P) {}
 }
 
-std::vector<ObjCmpInfoTy> ObjCmps;
+std::vector<std::unique_ptr<RetryInfoTy>> RetryInfos;
+static void addNewRetryInfo(std::unique_ptr<RetryInfoTy> &&NewRetryInfo) {
+  auto FirstToInvalidate = std::find_if(
+      RetryInfos.begin(), RetryInfos.end(),
+      [&](std::unique_ptr<RetryInfoTy> &ObjCmp) {
+        return ObjCmp->RollbackLocation > NewRetryInfo->RollbackLocation;
+      });
+  RetryInfos.erase(FirstToInvalidate, RetryInfos.end());
+  RetryInfos.emplace_back(std::move(NewRetryInfo));
+}
 
 int main(int argc, char **argv) {
   VERBOSE = (bool)getenv("VERBOSE");
@@ -1276,7 +1332,7 @@ int main(int argc, char **argv) {
   InputGenConfTy InputGenConf;
 
   std::function<void()> RunInputGen;
-  std::function<void(ObjCmpInfoTy)> CmpInfoCallback;
+  std::function<void(std::unique_ptr<RetryInfoTy>)> CmpInfoCallback;
 
   std::atexit([]() {
     INPUTGEN_TIMER_END(IGGen);
@@ -1295,15 +1351,15 @@ int main(int argc, char **argv) {
   RunInputGen = [&]() {
     InputGenRT =
         new InputGenRTTy(argv[0], OutputDir, FuncIdent.c_str(), StackPtr, I,
-                         InputGenConf, ObjCmps, &CmpInfoCallback);
+                         InputGenConf, RetryInfos, &CmpInfoCallback);
     INPUTGEN_TIMER_END(IGInitialization);
     INPUTGEN_TIMER_START(IGGen);
     EntryFn(argc, argv);
     exit(0);
   };
 
-  CmpInfoCallback = [&](ObjCmpInfoTy ObjCmp) {
-    ObjCmps.push_back(ObjCmp);
+  CmpInfoCallback = [&](std::unique_ptr<RetryInfoTy> &&ObjCmp) {
+    addNewRetryInfo(std::move(ObjCmp));
 
     INPUTGEN_DEBUG(std::cerr << "Retrying..." << std::endl);
 
