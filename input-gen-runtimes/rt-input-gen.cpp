@@ -591,12 +591,21 @@ struct InputGenRTTy {
     INPUTGEN_DEBUG(std::cerr << "CmpPtr " << (void *)A << " (#" << IdxA << ") "
                              << (void *)B << " (#" << IdxB << ") "
                              << std::endl);
-    // Globals cannot alias
-    if (std::find(GlobalBundleObjects.begin(), GlobalBundleObjects.end(),
-                  IdxA) != GlobalBundleObjects.end() &&
+
+    bool IsGlobalA =
         std::find(GlobalBundleObjects.begin(), GlobalBundleObjects.end(),
-                  IdxB) != GlobalBundleObjects.end()) {
-      INPUTGEN_DEBUG(std::cerr << "Compared globals, ignoring." << std::endl);
+                  IdxA) != GlobalBundleObjects.end();
+    bool IsGlobalB =
+        std::find(GlobalBundleObjects.begin(), GlobalBundleObjects.end(),
+                  IdxA) != GlobalBundleObjects.end();
+    if (IsGlobalA && IsGlobalB) {
+      INPUTGEN_DEBUG(std::cerr << "Globals cannot alias, ignoring."
+                               << std::endl);
+      return;
+    }
+    if ((IsGlobalA && B == nullptr) || (IsGlobalB && A == nullptr)) {
+      INPUTGEN_DEBUG(std::cerr << "Globals cannot be null, ignoring."
+                               << std::endl);
       return;
     }
     if (IdxA != IdxB && ShouldCallback) {
