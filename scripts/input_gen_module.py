@@ -554,5 +554,28 @@ def handle_single_module(task, args):
     return statistics
 
 if __name__ == '__main__':
-    print("Unsupported currently, look at the above function and restore if needed")
-    sys.exit(1)
+
+    parser = argparse.ArgumentParser('MassInputGen')
+    add_option_args(parser)
+    parser.add_argument('--outdir', required=True)
+    parser.add_argument('--input-module', required=True)
+    args = vars(parser.parse_args())
+
+    igm = InputGenModule(**args)
+    igm.generate_and_run_inputs()
+
+    try:
+        statistics = igm.get_statistics()
+        print("statistics")
+    except Exception as e:
+        raise e
+
+    igm.cleanup_outdir()
+    if args.cleanup:
+        try:
+            os.remove(args['input_module'])
+            os.rmdir(args['outdir'])
+        except Exception as e:
+            pass
+
+
