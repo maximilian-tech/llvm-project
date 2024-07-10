@@ -638,7 +638,7 @@ struct InputGenRTTy {
                   IdxA) != GlobalBundleObjects.end();
     bool IsGlobalB =
         std::find(GlobalBundleObjects.begin(), GlobalBundleObjects.end(),
-                  IdxA) != GlobalBundleObjects.end();
+                  IdxB) != GlobalBundleObjects.end();
     if (IsGlobalA && IsGlobalB) {
       INPUTGEN_DEBUG(std::cerr << "Globals cannot alias, ignoring."
                                << std::endl);
