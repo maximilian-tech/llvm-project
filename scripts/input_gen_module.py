@@ -19,15 +19,15 @@ def add_option_args(parser):
     parser.add_argument('--input-run-timeout', type=int, default=5)
     parser.add_argument('--input-gen-runtime', default='./input-gen-runtimes/rt-input-gen.cpp')
     parser.add_argument('--input-run-runtime', default='./input-gen-runtimes/rt-run.cpp')
-    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--verbose', action='store_true', default=False)
     parser.add_argument('--no-verbose', dest='verbose', action='store_false')
-    parser.add_argument('-g', action='store_true')
+    parser.add_argument('-g', action='store_true', default=False)
     parser.set_defaults(verbose=False)
-    parser.add_argument('--cleanup', action='store_true')
-    parser.add_argument('--coverage-statistics', action='store_true')
+    parser.add_argument('--cleanup', action='store_true', default=False)
+    parser.add_argument('--coverage-statistics', action='store_true', default=False)
     parser.add_argument('--coverage-runtime')
-    parser.add_argument('--branch-hints', action='store_true')
-    parser.add_argument('--disable-fp-handling', action='store_true')
+    parser.add_argument('--branch-hints', action='store_true', default=False)
+    parser.add_argument('--disable-fp-handling', action='store_true', default=False)
 
 class Function:
     def __init__(self, name, ident, verbose, generate_profs):
@@ -553,8 +553,7 @@ def handle_single_module(task, args):
 
     return statistics
 
-if __name__ == '__main__':
-
+def main():
     parser = argparse.ArgumentParser('MassInputGen')
     add_option_args(parser)
     parser.add_argument('--outdir', required=True)
@@ -571,11 +570,6 @@ if __name__ == '__main__':
         raise e
 
     igm.cleanup_outdir()
-    if args.cleanup:
-        try:
-            os.remove(args['input_module'])
-            os.rmdir(args['outdir'])
-        except Exception as e:
-            pass
 
-
+if __name__ == '__main__':
+    main()
