@@ -236,10 +236,10 @@ public:
 
     if (InstrumentForCoverage || !ClProfilePath.empty()) {
       ModulePassManager MPM;
-      if (InstrumentForCoverage)
-        MPM.addPass(PGOInstrumentationGen());
       if (!ClProfilePath.empty())
         MPM.addPass(PGOInstrumentationUse(ClProfilePath));
+      if (InstrumentForCoverage)
+        MPM.addPass(PGOInstrumentationGen());
       MPM.run(M, MAM);
     }
 
