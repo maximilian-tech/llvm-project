@@ -19,15 +19,16 @@ def add_option_args(parser):
     parser.add_argument('--input-run-timeout', type=int, default=5)
     parser.add_argument('--input-gen-runtime', default='./input-gen-runtimes/rt-input-gen.cpp')
     parser.add_argument('--input-run-runtime', default='./input-gen-runtimes/rt-run.cpp')
-    parser.add_argument('--verbose', action='store_true')
+    parser.add_argument('--verbose', action='store_true', default=False)
     parser.add_argument('--no-verbose', dest='verbose', action='store_false')
-    parser.add_argument('-g', action='store_true')
+    parser.add_argument('-g', action='store_true', default=False)
     parser.set_defaults(verbose=False)
-    parser.add_argument('--cleanup', action='store_true')
-    parser.add_argument('--coverage-statistics', action='store_true')
+    parser.add_argument('--cleanup', action='store_true', default=False)
+    parser.add_argument('--coverage-statistics', action='store_true', default=False)
     parser.add_argument('--coverage-runtime')
-    parser.add_argument('--branch-hints', action='store_true')
-    parser.add_argument('--disable-fp-handling', action='store_true')
+    parser.add_argument('--branch-hints', action='store_true', default=False)
+    parser.add_argument('--disable-fp-handling', action='store_true', default=False)
+    parser.add_argument('--function', default=None)
 
 class Function:
     def __init__(self, name, ident, verbose, generate_profs):
@@ -267,7 +268,6 @@ class InputGenModule:
             if self.disable_fp_handling:
                 self.ig_instrument_args.append("--input-gen-instrument-function-ptrs=false")
             self.ig_instrument_args.append("--input-gen-provide-branch-hints=%s" %  ("true" if self.branch_hints else "false"))
-            self.ig_instrument_args.append("--input-gen-use-cvis=%s" %  ("true" if self.branch_hints else "false"))
 
             self.print("input-gen args:", " ".join(self.ig_instrument_args))
             subprocess.run(self.ig_instrument_args,
@@ -294,8 +294,9 @@ class InputGenModule:
             fids = zerosplit[0:-1:2]
             fnames = zerosplit[1::2]
             for (fid, fname) in zip(fids, fnames, strict=True):
-                func = Function(fname, fid, self.verbose, self.coverage_statistics or self.branch_hints)
-                self.functions.append(func)
+                if self.function is None or self.function == fname:
+                    func = Function(fname, fid, self.verbose, self.coverage_statistics or self.branch_hints)
+                    self.functions.append(func)
         available_functions_file.close()
 
     def generate_inputs(self, input_gen_num, branch_hints=False):
@@ -554,6 +555,23 @@ def handle_single_module(task, args):
 
     return statistics
 
+def main():
+    parser = argparse.ArgumentParser('MassInputGen')
+    add_option_args(parser)
+    parser.add_argument('--outdir', required=True)
+    parser.add_argument('--input-module', required=True)
+    args = vars(parser.parse_args())
+
+    igm = InputGenModule(**args)
+    igm.generate_and_run_inputs()
+
+    try:
+        statistics = igm.get_statistics()
+        print("statistics")
+    except Exception as e:
+        raise e
+
+    igm.cleanup_outdir()
+
 if __name__ == '__main__':
-    print("Unsupported currently, look at the above function and restore if needed")
-    sys.exit(1)
+    main()

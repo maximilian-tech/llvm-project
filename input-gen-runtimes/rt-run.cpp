@@ -48,7 +48,7 @@ int rand() { return Rand(Gen); }
 
 template <typename T> T getNewValue() {
   static_assert(sizeof(T) <= MaxPrimitiveTypeSize);
-  printf("%i :: %i\n", CurStub, NumStubs);
+  // printf("%i :: %i\n", CurStub, NumStubs);
   assert(CurStub < NumStubs);
   T A;
   memcpy(&A, StubsMemory + CurStub * MaxPrimitiveTypeSize, sizeof(A));

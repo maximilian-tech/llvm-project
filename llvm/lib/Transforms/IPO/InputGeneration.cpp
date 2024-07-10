@@ -52,6 +52,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/ProfDataUtils.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
@@ -76,8 +77,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <iterator>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -142,7 +143,7 @@ static cl::opt<bool>
 static cl::opt<bool>
     ClUseCVIs("input-gen-use-cvis",
               cl::desc("Try to use AABranchHints to generate CVIs"), cl::Hidden,
-              cl::init(false));
+              cl::init(true));
 
 STATISTIC(NumInstrumented, "Number of instrumented instructions");
 
@@ -1973,9 +1974,11 @@ static void findAllBranchValues(Value *V,
                                 SmallVector<BranchHintInfo> &BranchHints,
                                 std::function<bool(Value *)> DominatesCallback,
                                 const BlockFrequencyInfo &BFI) {
-  auto GetBlockProfileCount = [&](BasicBlock *BB) {
-    auto Count = BFI.getBlockProfileCount(BB);
-    return Count.has_value() ? *Count : 0;
+  auto GetBlockProfileCount = [&](Instruction *I, int Idx) -> uint64_t {
+    uint64_t TV, FV;
+    if (extractBranchWeights(*I, TV, FV))
+      return Idx ? FV : TV;
+    return 0;
   };
   for (auto *U : V->users()) {
     if (auto *BI = dyn_cast<BranchInst>(U)) {
@@ -1983,10 +1986,10 @@ static void findAllBranchValues(Value *V,
       assert(Cond == V);
       BranchHint BHTrue = {BranchHint::EQ, true,
                            ConstantInt::get(Cond->getType(), 1),
-                           GetBlockProfileCount(BI->getSuccessor(0)), -1};
+                           GetBlockProfileCount(BI, 0), -1};
       BranchHint BHFalse = {BranchHint::NE, true,
                             ConstantInt::get(Cond->getType(), 1),
-                            GetBlockProfileCount(BI->getSuccessor(1)), -1};
+                            GetBlockProfileCount(BI, 1), -1};
       BranchHints.push_back({BHTrue, BI->getSuccessor(0)});
       BranchHints.push_back({BHFalse, BI->getSuccessor(1)});
     } else if (auto *Cmp = dyn_cast<CmpInst>(U)) {
@@ -2074,10 +2077,9 @@ static void findAllBranchValues(Value *V,
         for (auto *CmpUser : Cmp->users()) {
           if (auto *BI = dyn_cast<BranchInst>(CmpUser)) {
             BranchHint BHTrue = {Kind, Signed, Other,
-                                 GetBlockProfileCount(BI->getSuccessor(0)), -1};
+                                 GetBlockProfileCount(BI, 0), -1};
             BranchHint BHFalse = {GetNegated(Kind), Signed, Other,
-                                  GetBlockProfileCount(BI->getSuccessor(1)),
-                                  -1};
+                                  GetBlockProfileCount(BI, 1), -1};
             BranchHints.push_back({BHTrue, BI->getSuccessor(0)});
             BranchHints.push_back({BHFalse, BI->getSuccessor(1)});
           }
