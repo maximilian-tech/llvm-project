@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import tempfile
+import re
 import subprocess
 import argparse
 import os
@@ -24,6 +25,7 @@ def add_option_args(parser):
     parser.add_argument('-g', action='store_true', default=False)
     parser.set_defaults(verbose=False)
     parser.add_argument('--cleanup', action='store_true', default=False)
+    parser.add_argument('--timing', action='store_true', default=False)
     parser.add_argument('--coverage-statistics', action='store_true', default=False)
     parser.add_argument('--coverage-runtime')
     parser.add_argument('--branch-hints', action='store_true', default=False)
@@ -31,7 +33,7 @@ def add_option_args(parser):
     parser.add_argument('--function', default=None)
 
 class Function:
-    def __init__(self, name, ident, verbose, generate_profs):
+    def __init__(self, name, ident, verbose, generate_profs, timing):
         self.name = name
         self.ident = ident
         self.verbose = verbose
@@ -42,10 +44,12 @@ class Function:
         self.succeeded_seeds = []
         self.inputs = []
         self.unreachable_exit_inputs = []
-        self.times = []
+        self.run_times = []
+        self.gen_times = []
         self.unreachable_exit_times = []
         self.generate_profs = generate_profs
         self.profile_files = []
+        self.timing = timing
 
     def get_stderr(self):
         if self.verbose:
@@ -74,7 +78,6 @@ class Function:
         unreachable_exit = None
         if inpt is not None:
             try:
-                start_time = time.time()
                 igrunargs = [
                         self.input_run_executable,
                         inpt,
@@ -82,23 +85,33 @@ class Function:
                         available_functions_file_name,
                         self.ident,
                     ]
+
+                env = os.environ.copy()
                 if self.generate_profs:
-                    env = os.environ.copy()
                     profdatafile = os.path.join(self.inputs_dir, inpt + '.profdata')
                     env['LLVM_PROFILE_FILE'] = profdatafile
+                if self.timing:
+                    env['TIMING'] = '1'
+                    stdout = subprocess.PIPE
                 else:
-                    env = None
+                    stdout = self.get_stdout()
+
                 proc = subprocess.Popen(
                     igrunargs,
-                    stdout=self.get_stdout(),
+                    stdout=stdout,
                     stderr=self.get_stderr(),
+                    text=True,
                     env=env)
 
                 self.print('ig args run:', ' '.join(igrunargs))
                 out, err = proc.communicate(timeout=timeout)
 
-                end_time = time.time()
-                elapsed_time = end_time - start_time
+                if self.timing:
+                    times = re.findall(r'Time for ([a-zA-Z]+): ([0-9]+)\n', out)
+                    self.print(f'times: {times}')
+                    self.print(out, file=self.get_stdout())
+                else:
+                    times = []
 
                 if proc.returncode == 0 or proc.returncode == UNREACHABLE_EXIT_STATUS:
                     unreachable_exit = bool(proc.returncode == UNREACHABLE_EXIT_STATUS)
@@ -121,9 +134,9 @@ class Function:
 
         if not succeeded:
             profdatafile = None
-            elapsed_time = None
             unreachable_exit = None
-        self.times.append(elapsed_time)
+            times = []
+        self.run_times.append(times)
         self.unreachable_exit_times.append(unreachable_exit)
         if self.generate_profs:
             self.profile_files.append(profdatafile)
@@ -143,6 +156,10 @@ def my_add(a, b):
     return a + b
 
 def aggregate_statistics(stats, to_add):
+    if 'timing_gen' in stats:
+        del stats['timing_gen']
+    if 'timing_run' in stats:
+        del stats['timing_run']
     for k, v in stats.items():
         if isinstance(to_add[k], list):
             stats[k] = [my_add(a, b) for a, b in zip_longest(to_add[k], stats[k])]
@@ -163,6 +180,8 @@ def get_empty_statistics():
         'num_input_ran_funcs': 0,
         'num_bbs': None,
         'num_bbs_executed': [],
+        'timing_run': [],
+        'timing_gen': [],
         'input_generated_by_seed': [],
         'input_generated_by_seed_non_unreachable': [],
         'input_ran_by_seed': [],
@@ -295,7 +314,7 @@ class InputGenModule:
             fnames = zerosplit[1::2]
             for (fid, fname) in zip(fids, fnames, strict=True):
                 if self.function is None or self.function == fname:
-                    func = Function(fname, fid, self.verbose, self.coverage_statistics or self.branch_hints)
+                    func = Function(fname, fid, self.verbose, self.coverage_statistics or self.branch_hints, self.timing)
                     self.functions.append(func)
         available_functions_file.close()
 
@@ -348,18 +367,26 @@ class InputGenModule:
                             del env['INPUT_GEN_DISABLE_BRANCH_HINTS']
                     else:
                         env['INPUT_GEN_DISABLE_BRANCH_HINTS'] = '1'
+                    if self.timing:
+                        env['TIMING'] = '1'
+                        stdout = subprocess.PIPE
+                    else:
+                        stdout = self.get_stdout()
                     proc = subprocess.Popen(
                         iggenargs,
-                        stdout=self.get_stdout(),
+                        stdout=stdout,
                         stderr=self.get_stderr(),
+                        text=True,
                         env=env)
 
-                    # TODO With the current implementation one of the input
-                    # gens timing out would mean we lose some completed ones.
-                    #
-                    # We should just move the input-gen loop in here and only do
-                    # one output at a time.
                     out, err = proc.communicate(timeout=self.input_gen_timeout)
+
+                    if self.timing:
+                        times = re.findall(r'Time for ([a-zA-Z]+): ([0-9]+)\n', out)
+                        self.print(f'times: {times}')
+                        self.print(out, file=self.get_stdout())
+                    else:
+                        times = []
 
                     if proc.returncode == 0 or proc.returncode == UNREACHABLE_EXIT_STATUS:
                         unreachable_exit = bool(proc.returncode == UNREACHABLE_EXIT_STATUS)
@@ -401,10 +428,12 @@ class InputGenModule:
                     # Populate the generated inputs
                     func.succeeded_seeds += list(range(start, end))
                     func.inputs += fins
+                    func.gen_times.append(times)
                     assert(len(fins) == 1)
                     func.unreachable_exit_inputs.append(unreachable_exit)
                 else:
                     func.inputs += [None for _ in range(start, end)]
+                    func.gen_times.append([])
                     func.unreachable_exit_inputs += [None for _ in range(start, end)]
 
     def run_inputs(self, idx):
@@ -438,11 +467,14 @@ class InputGenModule:
     def update_statistics(self, stats):
         for func in self.functions:
             stats['num_funcs'] += 1
+            if self.timing:
+                stats['timing_run'].append({func.ident: func.run_times})
+                stats['timing_gen'].append({func.ident: func.gen_times})
             if func.input_gen_executable:
                 stats['num_instrumented_funcs'] += 1
             if len([inpt for inpt in func.inputs if inpt is not None]) != 0:
                 stats['num_input_generated_funcs'] += 1
-            if len([time for time in func.times if time is not None]) != 0:
+            if len([time for time in func.run_times if time is not None]) != 0:
                 stats['num_input_ran_funcs'] += 1
 
         def ensure_length(l):
@@ -466,7 +498,7 @@ class InputGenModule:
                     generated_funcs.add(func.ident)
                     if not func.unreachable_exit_inputs[i]:
                         generated_funcs_nu.add(func.ident)
-                if func.times[i]:
+                if func.run_times[i]:
                     ran_funcs.add(func.ident)
                     if not func.unreachable_exit_times[i]:
                         ran_funcs_nu.add(func.ident)

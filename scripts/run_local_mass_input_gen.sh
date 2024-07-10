@@ -51,6 +51,10 @@ elif [ "$JUG" != "" ]; then
     exit 1
 fi
 
+if [ "$ENABLE_TIMING" != "" ]; then
+    ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --timing"
+fi
+
 if [ "$NOCLEANUP" == "" ]; then
     ADDITIONAL_FLAGS="$ADDITIONAL_FLAGS --cleanup"
 fi
