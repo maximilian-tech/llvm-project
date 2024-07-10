@@ -28,6 +28,7 @@ def add_option_args(parser):
     parser.add_argument('--coverage-runtime')
     parser.add_argument('--branch-hints', action='store_true', default=False)
     parser.add_argument('--disable-fp-handling', action='store_true', default=False)
+    parser.add_argument('--function', default=None)
 
 class Function:
     def __init__(self, name, ident, verbose, generate_profs):
@@ -293,8 +294,9 @@ class InputGenModule:
             fids = zerosplit[0:-1:2]
             fnames = zerosplit[1::2]
             for (fid, fname) in zip(fids, fnames, strict=True):
-                func = Function(fname, fid, self.verbose, self.coverage_statistics or self.branch_hints)
-                self.functions.append(func)
+                if self.function is None or self.function == fname:
+                    func = Function(fname, fid, self.verbose, self.coverage_statistics or self.branch_hints)
+                    self.functions.append(func)
         available_functions_file.close()
 
     def generate_inputs(self, input_gen_num, branch_hints=False):
