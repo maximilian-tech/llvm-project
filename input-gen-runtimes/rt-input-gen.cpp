@@ -29,7 +29,6 @@
 #include "rt.hpp"
 
 #include "../llvm/include/llvm/Transforms/IPO/InputGenerationTypes.h"
-#include "llvm/Support/ErrorHandling.h"
 
 namespace {
 int VERBOSE = 0;
