@@ -36,7 +36,7 @@ extern int TIMING;
       std::chrono::steady_clock::time_point Timer##Name##End =                 \
           std::chrono::steady_clock::now();                                    \
       std::cout << "Time for " << #Name << ": "                                \
-                << std::chrono::duration_cast<std::chrono::microseconds>(      \
+                << std::chrono::duration_cast<std::chrono::nanoseconds>(       \
                        Timer##Name##End - Timer##Name##Begin)                  \
                        .count()                                                \
                 << std::endl;                                                  \
