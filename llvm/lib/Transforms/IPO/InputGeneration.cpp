@@ -1862,7 +1862,7 @@ Value *InputGenInstrumenter::constructFpFromPotentialCallees(
       if (Mode == IG_Generate) {
         if (auto *MemAccessI = LI->getPrevNonDebugInstruction())
           if (auto *MemAccessCal = dyn_cast<CallBase>(MemAccessI);
-              MemAccessCal &&
+              MemAccessCal && MemAccessCal->getCalledFunction() &&
               MemAccessCal->getCalledFunction()->getName().starts_with(
                   "__inputgen_access"))
             ToDelete.insert(MemAccessCal);
