@@ -51,6 +51,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/ProfDataUtils.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/ProfileData/InstrProf.h"
@@ -1542,9 +1543,13 @@ static void findAllBranchValues(Value *V,
                                 SmallVector<BranchHintInfo> &BranchHints,
                                 std::function<bool(Value *)> DominatesCallback,
                                 const BlockFrequencyInfo &BFI) {
-  auto GetBlockProfileCount = [&](BasicBlock *BB) {
-    auto Count = BFI.getBlockProfileCount(BB);
-    return Count.has_value() ? *Count : 0;
+  auto GetBlockProfileCount = [&](Instruction &I, int32_t Idx) -> uint64_t {
+    SmallVector<uint32_t> Weights;
+    if (!extractBranchWeights(I, Weights))
+      return 0UL;
+    if (Weights.size() <= Idx)
+      return 0UL;
+    return Weights[Idx];
   };
   for (auto *U : V->users()) {
     if (auto *BI = dyn_cast<BranchInst>(U)) {
@@ -1552,10 +1557,10 @@ static void findAllBranchValues(Value *V,
       assert(Cond == V);
       BranchHint BHTrue = {BranchHint::EQ, true,
                            ConstantInt::get(Cond->getType(), 1),
-                           GetBlockProfileCount(BI->getSuccessor(0)), -1};
+                           GetBlockProfileCount(*BI, 0), -1};
       BranchHint BHFalse = {BranchHint::NE, true,
                             ConstantInt::get(Cond->getType(), 1),
-                            GetBlockProfileCount(BI->getSuccessor(1)), -1};
+                            GetBlockProfileCount(*BI, 1), -1};
       BranchHints.push_back({BHTrue, BI->getSuccessor(0)});
       BranchHints.push_back({BHFalse, BI->getSuccessor(1)});
     } else if (auto *Cmp = dyn_cast<CmpInst>(U)) {
@@ -1643,10 +1648,9 @@ static void findAllBranchValues(Value *V,
         for (auto *CmpUser : Cmp->users()) {
           if (auto *BI = dyn_cast<BranchInst>(CmpUser)) {
             BranchHint BHTrue = {Kind, Signed, Other,
-                                 GetBlockProfileCount(BI->getSuccessor(0)), -1};
+                                 GetBlockProfileCount(*BI, 0), -1};
             BranchHint BHFalse = {GetNegated(Kind), Signed, Other,
-                                  GetBlockProfileCount(BI->getSuccessor(1)),
-                                  -1};
+                                  GetBlockProfileCount(*BI, 1), -1};
             BranchHints.push_back({BHTrue, BI->getSuccessor(0)});
             BranchHints.push_back({BHFalse, BI->getSuccessor(1)});
           }
