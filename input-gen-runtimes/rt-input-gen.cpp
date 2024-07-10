@@ -649,6 +649,14 @@ struct InputGenRTTy {
                                << std::endl);
       return;
     }
+    if ((IdxA != NullPtrIdx && !ObjA) || (IdxB != NullPtrIdx && !ObjB)) {
+      INPUTGEN_DEBUG(
+          std::cerr
+          << "Object is not managed by us, can't retry to make it better"
+          << std::endl);
+      return;
+    }
+
     if (IdxA != IdxB && ShouldCallback) {
       if (IdxB == NullPtrIdx) {
         (*RetryCallback)(std::make_unique<ObjCmpNullTy>(IdxA, IdxA));
