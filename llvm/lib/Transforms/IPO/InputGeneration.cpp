@@ -1543,8 +1543,10 @@ static void findAllBranchValues(Value *V,
                                 SmallVector<BranchHintInfo> &BranchHints,
                                 std::function<bool(Value *)> DominatesCallback,
                                 const BlockFrequencyInfo &BFI) {
-  auto GetBlockProfileCount = [&](Instruction &I, int32_t Idx) -> uint64_t {
+  auto GetBlockProfileCount = [&](Instruction &I, uint32_t Idx) -> uint64_t {
     SmallVector<uint32_t> Weights;
+    if (isa<UnreachableInst>(I.getSuccessor(Idx)->getTerminator()))
+      return 100UL;
     if (!extractBranchWeights(I, Weights))
       return 0UL;
     if (Weights.size() <= Idx)
