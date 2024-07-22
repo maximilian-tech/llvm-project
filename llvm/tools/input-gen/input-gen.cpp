@@ -206,6 +206,7 @@ public:
       case llvm::IG_Run:
         return "run";
       case llvm::IG_Record:
+        // ToDo.
         llvm_unreachable("Unsupported mode");
       }
       llvm_unreachable("Unknown mode");
@@ -284,6 +285,7 @@ public:
       case llvm::IG_Run:
         return "run";
       case llvm::IG_Record:
+        // ToDo
         llvm_unreachable("Unsupported mode");
       }
       llvm_unreachable("Unknown mode");
