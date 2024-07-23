@@ -211,15 +211,16 @@ public:
       }
       llvm_unreachable("Unknown mode");
     }();
-    std::string BcFileName = ClOutputDir + "/" + "input-gen.function." +
-                             EntryPoint.getName().str() + "." + ModeStr + ".bc";
-    std::string ExecutableFileName = ClOutputDir + "/" + "input-gen.function." +
-                                     EntryPoint.getName().str() + "." +
-                                     ModeStr + ".a.out";
+    const std::string file_prefix = ClOutputDir + "/" + "input-gen.function." + EntryPoint.getName().str() + "." + ModeStr;
+
+    std::string BcFileName =         file_prefix + ".bc";
+    std::string ExecutableFileName = file_prefix + ".a.out";
+
     if (!writeModuleToFile(*InstrM, BcFileName)) {
       llvm::errs() << "Writing instrumented module to file failed\n";
       exit(1);
     }
+
     if (ClCompileInputGenExecutables) {
       if (!compileExecutable(BcFileName, ExecutableFileName, RuntimeName)) {
         llvm::errs() << "Compiling instrumented module failed\n";
@@ -278,7 +279,7 @@ public:
       llvm::errs() << "Instrumenting failed\n";
       return;
     }
-    std::string ModeStr = [&]() {
+    const std::string ModeStr = [&]() {
       switch (Mode) {
       case llvm::IG_Generate:
         return "generate";
@@ -291,7 +292,7 @@ public:
       llvm_unreachable("Unknown mode");
     }();
     for (size_t It = 0; It < Functions.size(); It++) {
-      Function &F = *Functions[It];
+      const Function &F = *Functions[It];
 
       std::string FuncName = F.getName().str();
       LLVM_DEBUG(dbgs() << "Handling function @" << F.getName() << "\n");
@@ -309,10 +310,12 @@ public:
 
     postprocessModule(*InstrM, Mode);
 
-    std::string BcFileName =
-        ClOutputDir + "/" + "input-gen.module." + ModeStr + ".bc";
-    std::string ExecutableFileName =
-        ClOutputDir + "/" + "input-gen.module." + ModeStr + ".a.out";
+
+    const std::string file_prefix =  ClOutputDir + "/" + "input-gen.module." + ModeStr;
+
+    std::string BcFileName =         file_prefix + ".bc";
+    std::string ExecutableFileName = file_prefix + ".a.out";
+
     if (!writeModuleToFile(*InstrM, BcFileName)) {
       llvm::errs() << "Writing instrumented module to file failed\n";
       exit(1);

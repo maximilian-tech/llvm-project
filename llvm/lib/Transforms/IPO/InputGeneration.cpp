@@ -679,14 +679,14 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
 
   IGI.initializeCallbacks(M);
 
-  IGI.declareProbeStackFuncs(M);
-
-  if (Function *Free = M.getFunction("free"))
-    Free->setName(OverrideFreeName);
-
   switch (IGI.Mode) {
   case IG_Run:
   case IG_Generate:
+    IGI.declareProbeStackFuncs(M);
+
+    if (Function *Free = M.getFunction("free"))
+      Free->setName(OverrideFreeName);
+
     IGI.removeTokenFunctions(M);
     if (ClInstrumentFunctionPtrs)
       IGI.gatherFunctionPtrCallees(M);
@@ -698,13 +698,14 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
 
   IGI.provideGlobals(M);
 
-  renameGlobals(M, *TLI);
 
   switch (IGI.Mode) {
   case IG_Run:
     IGI.handleUnreachable(M);
+    renameGlobals(M, *TLI);
     break;
   case IG_Generate:
+    renameGlobals(M, *TLI);
   case IG_Record:
     for (auto &Fn : M)
       if (!Fn.isDeclaration())
@@ -831,7 +832,9 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
 
 bool ModuleInputGenInstrumenter::instrumentFunctionPtrs(Module &M) {
   if (ClInstrumentFunctionPtrs)
+  {
     IGI.instrumentFunctionPtrSources(M);
+  }
   IGI.provideFunctionPtrGlobals(M);
 
   return true;

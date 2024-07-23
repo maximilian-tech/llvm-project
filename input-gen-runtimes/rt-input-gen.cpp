@@ -1091,14 +1091,19 @@ static InputGenRTTy &getInputGenRT() { return *InputGenRT; }
 
 template <typename T>
 T ObjectTy::read(VoidPtrTy Ptr, uint32_t Size, BranchHint *BHs,
-                 int32_t BHSize) {
+                 int32_t BHSize)
+  {
+
   intptr_t Offset = OA.getOffsetFromObjBasePtr(Ptr);
+
   assert(Output.isAllocated(Offset, Size));
+
   Used.ensureAllocation(Offset, Size);
   Input.ensureAllocation(Offset, Size);
 
   T *OutputLoc = reinterpret_cast<T *>(
       advance(Output.Memory, -Output.AllocationOffset + Offset));
+
   if (allUsed(Offset, Size))
     return *OutputLoc;
 
