@@ -122,8 +122,8 @@ public:
     for (auto &segment : m_segments) {
       if (segment.isAdjacentTo(newSegment)) {
         segment.merge(newSegment);
+        std::cout << " MERGED_ADJ! " << std::endl;
         mergeLocalSegments();
-        std::cout << " MERGED! " << std::endl;
         return;
       }
     }
@@ -138,6 +138,7 @@ public:
         if (m_segments[i].isAdjacentTo(m_segments[j])) {
           m_segments[i].merge(m_segments[j]);
           m_segments.erase(m_segments.begin() + j);
+          std::cout << " MERGED_LOC! " << std::endl;
         }
       }
     }

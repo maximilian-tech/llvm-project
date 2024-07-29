@@ -20,21 +20,21 @@ define dso_local void @_Z3addPiS_S_i(ptr nocapture noundef readonly %0, ptr noca
   ret void
 
 9:                                                ; preds = %6, %9
-  %10 = phi i64 [ 0, %6 ], [ %18, %9 ]
-  %11 = getelementptr inbounds i32, ptr %0, i64 %10
-  tail call void @__record_access_i32(ptr %11, i64 0, i32 4, ptr %0, i32 0, ptr null, i32 0) #5
-  %12 = load i32, ptr %11, align 4, !tbaa !5
-  %13 = getelementptr inbounds i32, ptr %1, i64 %10
-  tail call void @__record_access_i32(ptr %13, i64 0, i32 4, ptr %1, i32 0, ptr null, i32 0) #5
-  %14 = load i32, ptr %13, align 4, !tbaa !5
-  %15 = add nsw i32 %14, %12
-  %16 = getelementptr inbounds i32, ptr %2, i64 %10
-  %17 = zext i32 %15 to i64
-  tail call void @__record_access_i32(ptr %16, i64 %17, i32 4, ptr %2, i32 1, ptr null, i32 0) #5
-  store i32 %15, ptr %16, align 4, !tbaa !5
-  %18 = add nuw nsw i64 %10, 1
-  %19 = icmp eq i64 %18, %7
-  br i1 %19, label %8, label %9, !llvm.loop !9
+  %10 = phi i64 [ %7, %6 ], [ %11, %9 ]
+  %11 = add nsw i64 %10, -1
+  %12 = getelementptr inbounds i32, ptr %0, i64 %11
+  tail call void @__record_access_i32(ptr %12, i64 0, i32 4, ptr %0, i32 0, ptr null, i32 0) #5
+  %13 = load i32, ptr %12, align 4, !tbaa !5
+  %14 = getelementptr inbounds i32, ptr %1, i64 %11
+  tail call void @__record_access_i32(ptr %14, i64 0, i32 4, ptr %1, i32 0, ptr null, i32 0) #5
+  %15 = load i32, ptr %14, align 4, !tbaa !5
+  %16 = add nsw i32 %15, %13
+  %17 = getelementptr inbounds i32, ptr %2, i64 %11
+  %18 = zext i32 %16 to i64
+  tail call void @__record_access_i32(ptr %17, i64 %18, i32 4, ptr %2, i32 1, ptr null, i32 0) #5
+  store i32 %16, ptr %17, align 4, !tbaa !5
+  %19 = icmp ugt i64 %10, 1
+  br i1 %19, label %9, label %8, !llvm.loop !9
 }
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
@@ -58,21 +58,22 @@ define dso_local noundef i32 @main(i32 noundef %0, ptr nocapture noundef readnon
   ret i32 0
 
 12:                                               ; preds = %2, %12
-  %13 = phi i64 [ 0, %2 ], [ %21, %12 ]
+  %13 = phi i64 [ 0, %2 ], [ %22, %12 ]
   %14 = tail call i32 @rand() #5
   %15 = getelementptr inbounds i32, ptr %5, i64 %13
   %16 = zext i32 %14 to i64
   tail call void @__record_access_i32(ptr %15, i64 %16, i32 4, ptr %5, i32 1, ptr null, i32 0) #5
   store i32 %14, ptr %15, align 4, !tbaa !5
-  %17 = tail call i32 @rand() #5
-  %18 = sdiv i32 %17, 100
-  %19 = getelementptr inbounds i32, ptr %6, i64 %13
-  %20 = zext i32 %18 to i64
-  tail call void @__record_access_i32(ptr %19, i64 %20, i32 4, ptr %6, i32 1, ptr null, i32 0) #5
-  store i32 %18, ptr %19, align 4, !tbaa !5
-  %21 = add nuw nsw i64 %13, 1
-  %22 = icmp eq i64 %21, 10
-  br i1 %22, label %8, label %12, !llvm.loop !11
+  %17 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %14) #5
+  %18 = tail call i32 @rand() #5
+  %19 = sdiv i32 %18, 100
+  %20 = getelementptr inbounds i32, ptr %6, i64 %13
+  %21 = zext i32 %19 to i64
+  tail call void @__record_access_i32(ptr %20, i64 %21, i32 4, ptr %6, i32 1, ptr null, i32 0) #5
+  store i32 %19, ptr %20, align 4, !tbaa !5
+  %22 = add nuw nsw i64 %13, 1
+  %23 = icmp eq i64 %22, 10
+  br i1 %23, label %8, label %12, !llvm.loop !11
 }
 
 ; Function Attrs: mustprogress nofree nounwind willreturn allockind("alloc,uninitialized") allocsize(0) memory(inaccessiblemem: readwrite)

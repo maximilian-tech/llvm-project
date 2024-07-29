@@ -4,7 +4,8 @@
 
 __attribute__((noinline)) void add(int* A, int* B, int* C, const int size)
 {
-    for (int i = 0; i < size; ++i)
+    //for (int i = 0; i < size; ++i)
+    for (int i = size -1 ; i >= 0 ; --i)
     {
         C[i] = A[i] + B[i];
     }
