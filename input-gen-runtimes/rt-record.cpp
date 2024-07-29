@@ -93,6 +93,16 @@ private:
   std::vector<T> data;
 };
 
+template <typename T>
+void write_to_disk(const std::string &fileName, MemorySegment<T> &segment) {
+  std::ofstream outFile(fileName);
+
+  for (const auto content : segment.getData()) {
+    outFile << content;
+  }
+  outFile.close();
+}
+
 // MemorySegmentHandler class
 class MemorySegmentHandler {
 public:
@@ -143,14 +153,10 @@ public:
 
   void dump() {
     fillAllSegmentsData();
+
     int i = 0;
     for (auto &segment : m_segments) {
-      std::ofstream outFile(std::format("output_{}.txt", i++));
-
-      for (auto content : segment.getData()) {
-        outFile << content;
-      }
-      outFile.close();
+      write_to_disk(std::format("output_{}.txt", i++), segment);
     }
   }
 

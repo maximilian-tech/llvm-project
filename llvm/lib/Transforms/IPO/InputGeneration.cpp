@@ -698,7 +698,6 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
 
   IGI.provideGlobals(M);
 
-
   switch (IGI.Mode) {
   case IG_Run:
     IGI.handleUnreachable(M);
@@ -831,8 +830,7 @@ bool ModuleInputGenInstrumenter::instrumentModuleForFunction(
 }
 
 bool ModuleInputGenInstrumenter::instrumentFunctionPtrs(Module &M) {
-  if (ClInstrumentFunctionPtrs)
-  {
+  if (ClInstrumentFunctionPtrs) {
     IGI.instrumentFunctionPtrSources(M);
   }
   IGI.provideFunctionPtrGlobals(M);
