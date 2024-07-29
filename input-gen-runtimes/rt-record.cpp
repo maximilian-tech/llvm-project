@@ -82,7 +82,6 @@ public:
   }
 
   const std::vector<T> &getData(void) { return data; }
-  std::size_t getDataSize(void) { return data.size(); }
 
   const VoidPtrTy start() const { return m_start; }
   const VoidPtrTy end() const { return m_end; }
