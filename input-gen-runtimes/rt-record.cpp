@@ -1,52 +1,12 @@
 /*
-/usr/bin/ld: /tmp/test_simple-d4cea7.o: in function `__inputgen_renamed_add':
-test_simple.c:(.text+0x0): multiple definition of `__inputgen_renamed_add';
-/tmp/test_simple-9f02ef.o:test_simple.c:(.text+0x0): first defined here
-/usr/bin/ld: /tmp/test_simple-d4cea7.o: in function `__inputgen_renamed_main':
-test_simple.c:(.text+0xf0): multiple definition of `__inputgen_renamed_main';
-/tmp/test_simple-9f02ef.o:test_simple.c:(.text+0xf0): first defined here
-/usr/bin/ld: /tmp/test_simple-d4cea7.o:(.data.rel.ro+0x0): multiple definition
-of `__record_function_pointers'; /tmp/test_simple-9f02ef.o:(.data.rel.ro+0x0):
-first defined here /usr/bin/ld: /tmp/test_simple-d4cea7.o:(.rodata+0x0):
-multiple definition of `__record_num_function_pointers';
-/tmp/test_simple-9f02ef.o:(.rodata+0x0): first defined here /usr/bin/ld:
-/usr/lib/gcc/x86_64-redhat-linux/13/../../../../lib64/Scrt1.o: in function
-`_start':
-(.text+0x1b): undefined reference to `main'
-/usr/bin/ld: /tmp/test_simple-9f02ef.o: in function `__inputgen_renamed_add':
-test_simple.c:(.text+0x17): undefined reference to `__record_push'
-/usr/bin/ld: test_simple.c:(.text+0x21): undefined reference to
-`__record_arg_ptr' /usr/bin/ld: test_simple.c:(.text+0x2b): undefined reference
-to `__record_arg_ptr' /usr/bin/ld: test_simple.c:(.text+0x35): undefined
-reference to `__record_arg_ptr' /usr/bin/ld: test_simple.c:(.text+0x3c):
-undefined reference to `__record_arg_i32' /usr/bin/ld:
-test_simple.c:(.text+0x7c): undefined reference to `__record_access_i32'
-/usr/bin/ld: test_simple.c:(.text+0xa0): undefined reference to
-`__record_access_i32' /usr/bin/ld: test_simple.c:(.text+0xc8): undefined
-reference to `__record_access_i32' /usr/bin/ld: test_simple.c:(.text+0xe8):
-undefined reference to `__record_pop' /usr/bin/ld: /tmp/test_simple-9f02ef.o: in
-function `__inputgen_renamed_main': test_simple.c:(.text+0x166): undefined
-reference to `__record_access_i32' /usr/bin/ld: test_simple.c:(.text+0x1aa):
-undefined reference to `__record_access_i32' /usr/bin/ld:
-test_simple.c:(.text+0x1ee): undefined reference to `__record_access_i32'
-/usr/bin/ld: /tmp/test_simple-d4cea7.o: in function `__inputgen_renamed_add':
-test_simple.c:(.text+0x17): undefined reference to `__record_push'
-/usr/bin/ld: test_simple.c:(.text+0x21): undefined reference to
-`__record_arg_ptr' /usr/bin/ld: test_simple.c:(.text+0x2b): undefined reference
-to `__record_arg_ptr' /usr/bin/ld: test_simple.c:(.text+0x35): undefined
-reference to `__record_arg_ptr' /usr/bin/ld: test_simple.c:(.text+0x3c):
-undefined reference to `__record_arg_i32' /usr/bin/ld:
-test_simple.c:(.text+0x7c): undefined reference to `__record_access_i32'
-/usr/bin/ld: test_simple.c:(.text+0xa0): undefined reference to
-`__record_access_i32' /usr/bin/ld: test_simple.c:(.text+0xc8): undefined
-reference to `__record_access_i32' /usr/bin/ld: test_simple.c:(.text+0xe8):
-undefined reference to `__record_pop' /usr/bin/ld: /tmp/test_simple-d4cea7.o: in
-function `__inputgen_renamed_main': test_simple.c:(.text+0x166): undefined
-reference to `__record_access_i32' /usr/bin/ld: test_simple.c:(.text+0x1aa):
-undefined reference to `__record_access_i32' /usr/bin/ld:
-test_simple.c:(.text+0x1ee): undefined reference to `__record_access_i32'*/
+Use via
 
-#include <vector>
+clang++  -std=c++20 -O2 -mllvm --include-input-gen -mllvm -input-gen-mode=record
+test_simple.c
+/scr/maximilian.sander/repos/llvm-project/input-gen-runtimes/rt-record.cpp &&
+./a.out
+
+*/
 
 /**
  * This implementation should do the following
@@ -76,6 +36,9 @@ test_simple.c:(.text+0x1ee): undefined reference to `__record_access_i32'*/
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <format>
+#include <fstream>
+#include <iostream>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -91,6 +54,7 @@ template <typename T>
 concept MemoryHandlerConcept = requires(T t, VoidPtrTy ptr, int32_t size) {
   { t.template read<int>(ptr, size) } -> std::same_as<int>;
   { t.template write<int>(ptr, 0, size) };
+  { t.dump() };
 };
 
 // MemorySegment class template
@@ -116,6 +80,9 @@ public:
     data.resize(size);
     std::memcpy(data.data(), m_start, size);
   }
+
+  const std::vector<T> &getData(void) { return data; }
+  std::size_t getDataSize(void) { return data.size(); }
 
   const VoidPtrTy start() const { return m_start; }
   const VoidPtrTy end() const { return m_end; }
@@ -147,6 +114,7 @@ public:
       if (segment.isAdjacentTo(newSegment)) {
         segment.merge(newSegment);
         mergeLocalSegments();
+        std::cout << " MERGED! " << std::endl;
         return;
       }
     }
@@ -169,6 +137,20 @@ public:
   void fillAllSegmentsData() {
     for (auto &segment : m_segments) {
       segment.fillData();
+      std::cout << " FILL! " << std::endl;
+    }
+  }
+
+  void dump() {
+    fillAllSegmentsData();
+    int i = 0;
+    for (auto &segment : m_segments) {
+      std::ofstream outFile(std::format("output_{}.txt", i++));
+
+      for (auto content : segment.getData()) {
+        outFile << content;
+      }
+      outFile.close();
     }
   }
 
@@ -183,11 +165,15 @@ public:
 
   template <typename TY> void read(VoidPtrTy Ptr, int32_t Size) {
     m_memory->template read<TY>(Ptr, Size);
+    std::cout << " READ! " << std::endl;
   }
 
   template <typename TY> void write(VoidPtrTy Ptr, TY Val, int32_t Size) {
     m_memory->template write<TY>(Ptr, Val, Size);
+    std::cout << " WRITE! " << std::endl;
   }
+
+  void dump(void) { m_memory->dump(); }
 
 private:
   MemoryHandler *m_memory;
@@ -200,8 +186,7 @@ AccessHandler<MemorySegmentHandler> &getAccessHandler() {
 }
 
 template <typename TY>
-static void access(VoidPtrTy Ptr, int64_t Val, int32_t Size, VoidPtrTy Base,
-                   int32_t Kind, BranchHint *BHs, int32_t BHSize) {
+static void access(VoidPtrTy Ptr, int64_t Val, int32_t Size, int32_t Kind) {
   switch (Kind) {
   case 0:
     getAccessHandler().template read<TY>(Ptr, Size);
@@ -231,18 +216,39 @@ static void access(VoidPtrTy Ptr, int64_t Val, int32_t Size, VoidPtrTy Base,
   }
 }
 
-#define DEFINE_RW(TY, NAME)                                                    \
+extern "C" {
+
+#define RW(TY, NAME)                                                           \
   __attribute__((always_inline)) void __record_access_##NAME(                  \
-      VoidPtrTy Ptr, int64_t Val, int32_t Size, int32_t Kind) {                \
+      VoidPtrTy Ptr, int64_t Val, int32_t Size, VoidPtrTy Base, int32_t Kind,  \
+      BranchHint *BHs, int32_t BHSize) {                                       \
     access<TY>(Ptr, Val, Size, Kind);                                          \
   }
 
-DEFINE_RW(bool, i1)
-DEFINE_RW(char, i8)
-DEFINE_RW(short, i16)
-DEFINE_RW(int32_t, i32)
-DEFINE_RW(int64_t, i64)
-DEFINE_RW(float, float)
-DEFINE_RW(double, double)
-DEFINE_RW(VoidPtrTy, ptr)
-#undef DEFINE_RW
+RW(bool, i1)
+RW(char, i8)
+RW(short, i16)
+RW(int32_t, i32)
+RW(int64_t, i64)
+RW(float, float)
+RW(double, double)
+RW(VoidPtrTy, ptr)
+#undef RW
+
+#define ARG(TY, NAME)                                                          \
+  __attribute__((always_inline)) TY __record_arg_##NAME(BranchHint *BHs,       \
+                                                        int32_t BHSize) {}
+
+ARG(bool, i1)
+ARG(char, i8)
+ARG(short, i16)
+ARG(int32_t, i32)
+ARG(int64_t, i64)
+ARG(float, float)
+ARG(double, double)
+ARG(VoidPtrTy, ptr)
+#undef ARG
+
+void __record_push(void) {}
+void __record_pop(void) { getAccessHandler().dump(); }
+}
