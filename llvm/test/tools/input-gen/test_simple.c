@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
     for (int i = 0; i < size; ++i)
     {
         A[i] = rand();
-        printf("%i\n",A[i]);
+        //printf("%i\n",A[i]);
         B[i] = rand()/100;
     }
 
@@ -31,4 +31,7 @@ int main(int argc, char* argv[])
 
     printf("%i\n", C[size-1]);
 
+    free(A);
+    free(B);
+    free(C);
 }

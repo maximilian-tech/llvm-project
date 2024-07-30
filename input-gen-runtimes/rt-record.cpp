@@ -2,7 +2,7 @@
 Use via
 
 clang++  -std=c++20 -O2 -mllvm --include-input-gen -mllvm -input-gen-mode=record
-test_simple.c
+test_simple.c -input-gen-entry-point=_Z3addPiS_S_i
 /scr/maximilian.sander/repos/llvm-project/input-gen-runtimes/rt-record.cpp &&
 ./a.out
 
@@ -58,6 +58,8 @@ concept MemoryHandlerConcept = requires(T t, VoidPtrTy ptr, int32_t size) {
 };
 
 // MemorySegment class template
+// ToDo: One might think of a better data structure to make prepending + merging
+// less costly?
 template <typename T> class MemorySegment {
 public:
   MemorySegment(VoidPtrTy startPtr, std::size_t size)

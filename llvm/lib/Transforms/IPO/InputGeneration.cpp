@@ -227,8 +227,9 @@ InputGenerationInstrumentPass::InputGenerationInstrumentPass() = default;
 PreservedAnalyses
 InputGenerationInstrumentPass::run(Module &M, AnalysisManager<Module> &MAM) {
   ModuleInputGenInstrumenter Profiler(M, MAM, ClInstrumentationMode, true);
-  if (Profiler.instrumentClEntryPoint(M))
+  if (Profiler.instrumentClEntryPoint(M)) {
     return PreservedAnalyses::none();
+  }
   return PreservedAnalyses::all();
 }
 
@@ -641,6 +642,7 @@ bool ModuleInputGenInstrumenter::instrumentClEntryPoint(Module &M) {
     errs() << "No entry point found, used \"" << ClEntryPoint << "\".\n";
     return false;
   }
+  errs() << "Got into the abyss" << "\".\n";
   return instrumentModuleForFunction(M, *EntryPoint);
 }
 
