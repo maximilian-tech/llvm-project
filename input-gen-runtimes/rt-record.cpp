@@ -45,8 +45,16 @@ test_simple.c -input-gen-entry-point=_Z3addPiS_S_i
 
 #include "../llvm/include/llvm/Transforms/IPO/InputGenerationTypes.h"
 
-using VoidPtrTy = uint8_t *;
+// #include "llvm/IR/DebugInfoMetadata.h"
+// #include "llvm/IR/Function.h"
+// #include "llvm/IR/IRBuilder.h"
+// #include "llvm/IR/Instruction.h"
+// #include "llvm/IR/IntrinsicInst.h"
+// #include "llvm/IR/Metadata.h"
+// #include "llvm/Support/raw_ostream.h"
 
+using VoidPtrTy = uint8_t *;
+// using namespace llvm;
 class BranchHint {};
 
 // Concept to ensure MemoryHandler has read and write methods

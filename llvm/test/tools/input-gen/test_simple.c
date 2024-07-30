@@ -14,6 +14,7 @@ __attribute__((noinline)) void add(int* A, int* B, int* C, const int size)
 int main(int argc, char* argv[])
 {
     const int size = 10;
+
     int* A = (int*) malloc(size*sizeof(int));
     int* B = (int*) malloc(size*sizeof(int));
     int* C = (int*) malloc(size*sizeof(int));
