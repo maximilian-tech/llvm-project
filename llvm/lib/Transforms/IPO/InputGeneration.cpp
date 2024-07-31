@@ -74,9 +74,11 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <sstream> // for std::ostringstream
 #include <string>
 
 using namespace llvm;
@@ -397,6 +399,20 @@ static Value *igGetUnderlyingObject(Value *Addr) {
   return Object;
 }
 
+std::string getDebugMetadataName(const Instruction *I) {
+  if (!I) {
+    return "";
+  }
+  std::ostringstream stream; // use ostringstream instead of ostream
+  DILocation *Loc = I->getDebugLoc();
+  if (Loc) {
+    // Get the scope of the debug location
+    stream << Loc->getFilename().str() << ":" << Loc->getLine() << ":"
+           << Loc->getColumn();
+    return stream.str();
+  }
+  return "unknown";
+}
 void InputGenInstrumenter::instrumentMaskedLoadOrStore(
     const InterestingMemoryAccess &Access, const DataLayout &DL) {
   auto *CI = dyn_cast<CallInst>(Access.I);
@@ -449,7 +465,8 @@ void InputGenInstrumenter::instrumentMaskedLoadOrStore(
         }
         int32_t AllocSize = DL.getTypeAllocSize(ElTy);
         emitMemoryAccessCallback(IRB, GEP, V, ElTy, AllocSize, Access.Kind,
-                                 Object, nullptr);
+                                 Object, nullptr,
+                                 getDebugMetadataName(Access.I));
       });
 }
 
@@ -530,8 +547,9 @@ void InputGenInstrumenter::instrumentAddress(
       }
     } else {
       int32_t AllocSize = DL.getTypeAllocSize(TheType);
+      std::string ArrayName = getDebugMetadataName(Access.I);
       emitMemoryAccessCallback(IRB, TheAddr, TheValue, TheType, AllocSize,
-                               Access.Kind, Object, ValueToReplace);
+                               Access.Kind, Object, ValueToReplace, ArrayName);
     }
   };
   Value *ValueToReplace = nullptr;
@@ -550,7 +568,7 @@ void InputGenInstrumenter::instrumentAddress(
 void InputGenInstrumenter::emitMemoryAccessCallback(
     IRBuilderBase &IRB, Value *Addr, Value *V, Type *AccessTy,
     int32_t AllocSize, InterestingMemoryAccess::KindTy Kind, Value *Object,
-    Value *ValueToReplace) {
+    Value *ValueToReplace, const std::string &ArrayName) {
 
   if (auto *GV = dyn_cast<GlobalVariable>(Addr);
       GV && isLibCGlobal(GV->getName()))
@@ -586,6 +604,14 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
   Args.insert(Args.end(), Hints.begin(), Hints.end());
   if (isa<PointerType>(AccessTy) && AccessTy->getPointerAddressSpace())
     AccessTy = AccessTy->getPointerTo();
+
+  // Create a global value with the array names and pass the pointer to the
+  // string as the last variable.
+  if (this->Mode == IG_Record) {
+    Value *ArrayNameConst = IRB.CreateGlobalStringPtr(ArrayName);
+    Args.push_back(ArrayNameConst);
+  }
+
   auto Fn = InputGenMemoryAccessCallback[AccessTy];
   if (!Fn.getCallee()) {
     LLVM_DEBUG(dbgs() << "No memory access callback for " << *AccessTy << "\n");
@@ -887,6 +913,12 @@ void InputGenInstrumenter::declareProbeStackFuncs(Module &M) {
 
 void InputGenInstrumenter::initializeCallbacks(Module &M) {
 
+  // // Get the i8 type in the context of module M
+  // Type *Int8Ty = Type::getInt8Ty(M.getContext());
+
+  // Create a pointer to the i8 type (i8*)
+  PointerType *Int8PtrTy = PointerType::get(Int8Ty, 0);
+
   auto Prefix = getCallbackPrefix(Mode);
 
   Type *Types[] = {Int1Ty,   Int8Ty, Int16Ty, Int32Ty,  Int64Ty,
@@ -894,7 +926,7 @@ void InputGenInstrumenter::initializeCallbacks(Module &M) {
   for (Type *Ty : Types) {
     InputGenMemoryAccessCallback[Ty] = M.getOrInsertFunction(
         Prefix + "access_" + ::getTypeName(Ty), VoidTy, PtrTy, Int64Ty, Int32Ty,
-        PtrTy, Int32Ty, PtrTy, Int32Ty);
+        PtrTy, Int32Ty, PtrTy, Int32Ty, Int8PtrTy);
     StubValueGenCallback[Ty] = M.getOrInsertFunction(
         Prefix + "get_" + ::getTypeName(Ty), Ty, PtrTy, Int32Ty);
     ArgGenCallback[Ty] = M.getOrInsertFunction(
