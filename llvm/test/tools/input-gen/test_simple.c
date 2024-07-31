@@ -1,5 +1,29 @@
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <dlfcn.h>
+
+// Function pointer to the original malloc
+void *(*original_malloc)(size_t size);
+
+// Annotated malloc function
+void *my_annotated_malloc(size_t size) {
+    printf("Calling annotated malloc\n");
+    return original_malloc(size);
+}
+
+// Constructor function to initialize and replace malloc
+__attribute__((constructor)) void init() {
+    original_malloc = (void *(*)(size_t))dlsym(RTLD_NEXT, "malloc");
+    if (original_malloc == NULL) {
+        fprintf(stderr, "Error in dlsym: %s\n", dlerror());
+        exit(1);
+    }
+}
+
+// Override malloc with the annotated version
+//#define malloc(size) my_annotated_malloc(size)
+
 #include <time.h>
 
 __attribute__((noinline)) void add(int* A, int* B, int* C, const int size)
