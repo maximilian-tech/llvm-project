@@ -45,36 +45,35 @@ test_simple.c -input-gen-entry-point=_Z3addPiS_S_i
 
 #include "../llvm/include/llvm/Transforms/IPO/InputGenerationTypes.h"
 
-// #include "llvm/IR/DebugInfoMetadata.h"
-// #include "llvm/IR/Function.h"
-// #include "llvm/IR/IRBuilder.h"
-// #include "llvm/IR/Instruction.h"
-// #include "llvm/IR/IntrinsicInst.h"
-// #include "llvm/IR/Metadata.h"
-// #include "llvm/Support/raw_ostream.h"
-
 using VoidPtrTy = uint8_t *;
-// using namespace llvm;
+
 class BranchHint {};
+
+template <typename TY> struct MemoryOperationArgsWrite {
+  VoidPtrTy Ptr;
+  TY Val;
+  int32_t Size;
+  std::string Name;
+};
 
 // Concept to ensure MemoryHandler has read and write methods
 template <typename T>
-concept MemoryHandlerConcept = requires(T t, VoidPtrTy ptr, int32_t size) {
-  { t.template read<int>(ptr, size) } -> std::same_as<int>;
-  { t.template write<int>(ptr, 0, size) };
+concept MemoryHandlerConcept = requires(T t, VoidPtrTy ptr, int32_t size,
+                                        MemoryOperationArgsWrite<T> args) {
+  { t.template read<T>(ptr, size) } -> std::same_as<T>;
+  { t.template write(args) };
   { t.dump() };
 };
 
 // MemorySegment class template
-// ToDo: One might think of a better data structure to make prepending + merging
-// less costly?
 template <typename T> class MemorySegment {
 public:
-  MemorySegment(VoidPtrTy startPtr, std::size_t size)
-      : m_start(startPtr), m_end(startPtr + size) {}
+  MemorySegment(VoidPtrTy startPtr, std::size_t size, const std::string &name)
+      : m_start(startPtr), m_end(startPtr + size), m_name(name) {}
 
   bool isAdjacentTo(const MemorySegment &other) const {
-    return this->m_end == other.m_start || this->m_start == other.m_end;
+    return (this->m_end == other.m_start || this->m_start == other.m_end) &&
+           this->m_name == other.m_name;
   }
 
   void merge(const MemorySegment &other) {
@@ -91,22 +90,27 @@ public:
     std::memcpy(data.data(), m_start, size);
   }
 
-  const std::vector<T> &getData(void) { return data; }
+  const std::vector<T> &getData() const { return data; }
 
   const VoidPtrTy start() const { return m_start; }
   const VoidPtrTy end() const { return m_end; }
+  const std::string &getName() const { return m_name; }
 
 private:
   VoidPtrTy m_start;
   VoidPtrTy m_end;
+  std::string m_name;
   std::vector<T> data;
 };
 
 template <typename T>
-void write_to_disk(const std::string &fileName, MemorySegment<T> &segment) {
+void write_to_disk(const std::string &fileName,
+                   const MemorySegment<T> &segment) {
   std::ofstream outFile(fileName);
 
-  for (const auto content : segment.getData()) {
+  outFile << segment.getName() << "\n";
+
+  for (const auto &content : segment.getData()) {
     outFile << content;
   }
   outFile.close();
@@ -115,9 +119,9 @@ void write_to_disk(const std::string &fileName, MemorySegment<T> &segment) {
 // MemorySegmentHandler class
 class MemorySegmentHandler {
 public:
-  template <typename TY> void write(VoidPtrTy Ptr, TY Val, int32_t Size) {
-    std::memcpy(Ptr, &Val, Size);
-    addElement(Ptr, Size);
+  template <typename TY> void write(const MemoryOperationArgsWrite<TY> &args) {
+    std::memcpy(args.Ptr, &args.Val, args.Size);
+    addElement(args);
   }
 
   template <typename TY> TY read(VoidPtrTy Ptr, int32_t Size) {
@@ -126,13 +130,14 @@ public:
     return Val;
   }
 
-  void addElement(VoidPtrTy Ptr, std::size_t Size) {
-    MemorySegment<uint8_t> newSegment(Ptr, Size);
+  template <typename TY>
+  void addElement(const MemoryOperationArgsWrite<TY> &args) {
+    MemorySegment<uint8_t> newSegment(args.Ptr, args.Size, args.Name);
 
     for (auto &segment : m_segments) {
       if (segment.isAdjacentTo(newSegment)) {
         segment.merge(newSegment);
-        std::cout << " MERGED_ADJ! " << std::endl;
+        std::cout << "MERGED_ADJ!" << std::endl;
         mergeLocalSegments();
         return;
       }
@@ -148,7 +153,7 @@ public:
         if (m_segments[i].isAdjacentTo(m_segments[j])) {
           m_segments[i].merge(m_segments[j]);
           m_segments.erase(m_segments.begin() + j);
-          std::cout << " MERGED_LOC! " << std::endl;
+          std::cout << "MERGED_LOC!" << std::endl;
         }
       }
     }
@@ -157,7 +162,7 @@ public:
   void fillAllSegmentsData() {
     for (auto &segment : m_segments) {
       segment.fillData();
-      std::cout << " FILL! " << std::endl;
+      std::cout << "FILL!" << std::endl;
     }
   }
 
@@ -165,7 +170,7 @@ public:
     fillAllSegmentsData();
 
     int i = 0;
-    for (auto &segment : m_segments) {
+    for (const auto &segment : m_segments) {
       write_to_disk(std::format("output_{}.txt", i++), segment);
     }
   }
@@ -181,15 +186,15 @@ public:
 
   template <typename TY> void read(VoidPtrTy Ptr, int32_t Size) {
     m_memory->template read<TY>(Ptr, Size);
-    std::cout << " READ! " << std::endl;
+    std::cout << "READ!" << std::endl;
   }
 
-  template <typename TY> void write(VoidPtrTy Ptr, TY Val, int32_t Size) {
-    m_memory->template write<TY>(Ptr, Val, Size);
-    std::cout << " WRITE! " << std::endl;
+  template <typename TY> void write(const MemoryOperationArgsWrite<TY> &args) {
+    m_memory->template write<TY>(args);
+    std::cout << "WRITE!" << std::endl;
   }
 
-  void dump(void) { m_memory->dump(); }
+  void dump() { m_memory->dump(); }
 
 private:
   MemoryHandler *m_memory;
@@ -202,7 +207,8 @@ AccessHandler<MemorySegmentHandler> &getAccessHandler() {
 }
 
 template <typename TY>
-static void access(VoidPtrTy Ptr, int64_t Val, int32_t Size, int32_t Kind) {
+static void access(VoidPtrTy Ptr, int64_t Val, int32_t Size, int32_t Kind,
+                   char *Name) {
   switch (Kind) {
   case 0:
     getAccessHandler().template read<TY>(Ptr, Size);
@@ -224,7 +230,8 @@ static void access(VoidPtrTy Ptr, int64_t Val, int32_t Size, int32_t Kind) {
         return static_cast<TY>(Val);
       }
     }();
-    getAccessHandler().template write<TY>(Ptr, TyVal, Size);
+    getAccessHandler().template write<TY>(
+        MemoryOperationArgsWrite<TY>{Ptr, TyVal, Size, Name});
     return;
   }
   default:
@@ -236,9 +243,9 @@ extern "C" {
 
 #define RW(TY, NAME)                                                           \
   __attribute__((always_inline)) void __record_access_##NAME(                  \
-      VoidPtrTy Ptr, int64_t Val, int32_t Size, VoidPtrTy Base, int32_t Kind,  \
-      BranchHint *BHs, int32_t BHSize) {                                       \
-    access<TY>(Ptr, Val, Size, Kind);                                          \
+      VoidPtrTy Ptr, int64_t Val, int32_t Size, VoidPtrTy /*Base*/,            \
+      int32_t Kind, BranchHint * /*BHs*/, int32_t /*BHSize*/, char *Name) {    \
+    access<TY>(Ptr, Val, Size, Kind, Name);                                    \
   }
 
 RW(bool, i1)
@@ -252,8 +259,8 @@ RW(VoidPtrTy, ptr)
 #undef RW
 
 #define ARG(TY, NAME)                                                          \
-  __attribute__((always_inline)) TY __record_arg_##NAME(BranchHint *BHs,       \
-                                                        int32_t BHSize) {}
+  __attribute__((always_inline)) TY __record_arg_##NAME(BranchHint * /*BHs*/,  \
+                                                        int32_t /*BHSize*/) {}
 
 ARG(bool, i1)
 ARG(char, i8)
@@ -264,6 +271,15 @@ ARG(float, float)
 ARG(double, double)
 ARG(VoidPtrTy, ptr)
 #undef ARG
+
+void __record_cmp_ptr(VoidPtrTy A, VoidPtrTy B, int32_t Predicate) {
+  // getInputGenRT().cmpPtr(A, B, Predicate);
+}
+
+void __record_unreachable(int32_t No, const char *Name) {
+  // printf("Reached unreachable %i due to '%s'\n", No, Name ? Name : "n/a");
+  // exit(UnreachableExitStatus);
+}
 
 void __record_push(void) {}
 void __record_pop(void) { getAccessHandler().dump(); }
