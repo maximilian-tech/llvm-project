@@ -399,18 +399,76 @@ static Value *igGetUnderlyingObject(Value *Addr) {
   return Object;
 }
 
+// Function to extract metadata from a pointer value (Value*)
+static void extractMetadataFromPointer(const Value *ptr) {
+  // Iterate over the uses of the pointer value
+  for (const User *U : ptr->users()) {
+    if (const DbgDeclareInst *dbgDeclare = dyn_cast<DbgDeclareInst>(U)) {
+      if (auto *localVar = dbgDeclare->getVariable()) {
+        std::ostringstream stream;
+        stream << "Variable name: " << localVar->getName().str() << "\n";
+        stream << "Argument number: " << localVar->getArg() << "\n";
+        stream << "Scope: " << localVar->getScope()->getName().str() << "\n";
+        stream << "File: " << localVar->getFile()->getFilename().str() << "\n";
+        stream << "Line: " << localVar->getLine() << "\n";
+        stream << "Type: " << localVar->getType()->getName().str() << "\n";
+        std::cout << stream.str();
+        return;
+      }
+    } else if (const DbgValueInst *dbgValue = dyn_cast<DbgValueInst>(U)) {
+      if (auto *localVar = dbgValue->getVariable()) {
+        std::ostringstream stream;
+        stream << "Variable name: " << localVar->getName().str() << "\n";
+        stream << "Argument number: " << localVar->getArg() << "\n";
+        stream << "Scope: " << localVar->getScope()->getName().str() << "\n";
+        stream << "File: " << localVar->getFile()->getFilename().str() << "\n";
+        stream << "Line: " << localVar->getLine() << "\n";
+        stream << "Type: " << localVar->getType()->getName().str() << "\n";
+        std::cout << stream.str();
+        return;
+      } else {
+        std::cout << "Miss DbgValueInst" << std::endl;
+      }
+    }
+  }
+  std::cerr << "No debug metadata found for the pointer.\n";
+}
+
 std::string getDebugMetadataName(const Instruction *I) {
   if (!I) {
     return "";
   }
-  std::ostringstream stream; // use ostringstream instead of ostream
+  if (0) {
+    std::ostringstream stream;
+    const Function *F = I->getFunction();
+    MDNode *dbgNode = F->getMetadata("dbg");
+
+    if (dbgNode) {
+      // Assuming the metadata is a DISubprogram (which is typical for function
+      // debug info)
+      if (auto *subProgram = dyn_cast<DISubprogram>(dbgNode)) {
+        stream << "Function name: " << subProgram->getName().str() << "\n";
+        stream << "Source file: " << subProgram->getFile()->getFilename().str()
+               << "\n";
+        stream << "Line number: " << subProgram->getLine() << "\n";
+      } else {
+        stream << "dbg metadata is not a DISubprogram.\n";
+      }
+    } else {
+      stream << "No dbg metadata found for the function.\n";
+    }
+
+    std::cout << stream.str();
+  }
   DILocation *Loc = I->getDebugLoc();
   if (Loc) {
     // Get the scope of the debug location
+    std::ostringstream stream; // use ostringstream instead of ostream
     stream << Loc->getFilename().str() << ":" << Loc->getLine() << ":"
            << Loc->getColumn();
     return stream.str();
   }
+
   return "unknown";
 }
 void InputGenInstrumenter::instrumentMaskedLoadOrStore(
@@ -447,10 +505,13 @@ void InputGenInstrumenter::instrumentMaskedLoadOrStore(
       Access.I, [&](IRBuilderBase &IRB, Value *Idx) {
         Value *Cond = IRB.CreateExtractElement(Mask, Idx);
         Instruction *NewTerm = SplitBlockAndInsertIfThen(
-            Cond, IRB.GetInsertBlock()->getTerminator(), /*Unreachable=*/false);
+            Cond, IRB.GetInsertBlock()->getTerminator(),
+            /*Unreachable=*/false);
+
         IRB.SetInsertPoint(NewTerm);
         Value *GEP = IRB.CreateGEP(Access.AccessTy, Access.Addr, {Idx});
         Value *V = nullptr;
+
         switch (Access.Kind) {
         case InterestingMemoryAccess::READ:
           assert(Access.V == nullptr);
@@ -463,6 +524,7 @@ void InputGenInstrumenter::instrumentMaskedLoadOrStore(
           // Unimplemented, but we abort() in the runtime
           break;
         }
+
         int32_t AllocSize = DL.getTypeAllocSize(ElTy);
         emitMemoryAccessCallback(IRB, GEP, V, ElTy, AllocSize, Access.Kind,
                                  Object, nullptr,
@@ -597,6 +659,9 @@ void InputGenInstrumenter::emitMemoryAccessCallback(
 
   auto *Ptr = IRB.CreateAddrSpaceCast(Addr, PtrTy);
   auto *Base = IRB.CreateAddrSpaceCast(Object, PtrTy);
+
+  extractMetadataFromPointer(Addr);
+
   SmallVector<Value *, 7> Args = {Ptr, Val,
                                   ConstantInt::get(Int32Ty, AllocSize), Base,
                                   ConstantInt::get(Int32Ty, Kind)};
@@ -733,6 +798,7 @@ bool ModuleInputGenInstrumenter::instrumentModule(Module &M) {
     break;
   case IG_Generate:
     renameGlobals(M, *TLI);
+    LLVM_FALLTHROUGH;
   case IG_Record:
     for (auto &Fn : M)
       if (!Fn.isDeclaration())
